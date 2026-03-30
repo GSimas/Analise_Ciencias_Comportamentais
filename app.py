@@ -210,7 +210,7 @@ CORES_GRUPOS = {
 # ==============================================================================
 # FASE 1: UPLOAD E PREPARAÇÃO DA BASE
 # ==============================================================================
-uploaded_file = st.sidebar.file_uploader("📂 Envie a Tabela-mãe (CSV ou XLSX)", type=['csv', 'xlsx'])
+uploaded_file = st.sidebar.file_uploader("📂 Envie a Tabela-mãe (CSV)", type=['csv'])
 
 if uploaded_file:
     with st.spinner('Lendo e limpando os dados...'):
