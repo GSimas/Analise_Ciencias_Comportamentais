@@ -825,4 +825,4 @@ if uploaded_file:
             except Exception as e:
                 st.error(f"Erro ao calcular estatísticas de conversão: {e}")
 else:
-    st.info("👈 Por favor, faça o upload do arquivo Tabela-mãe (.csv ou .xlsx) no menu lateral para iniciar.")
+    st.info("👈 Por favor, faça o upload do arquivo Tabela-mãe (.csv) no menu lateral para iniciar.")
