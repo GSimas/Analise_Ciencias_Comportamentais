@@ -6,14 +6,44 @@ import plotly.graph_objects as go
 import statsmodels.formula.api as smf
 import pingouin as pg
 from scipy.stats import fisher_exact
-
+import secrets  
+import ssl
 import io
+import urllib.request
 from fpdf import FPDF
 
 # Configuração da Página
 st.set_page_config(page_title="Relatório Ciências Comportamentais", layout="wide")
-st.title("📊 Análise Comportamental - Inclusão Econômica")
+st.title("📊 Análise Comportamental - Liberdade Financeira")
 st.markdown("Projeto Sebrae / CINCO / Impact Hub - Avaliação de Intervenções e Hábito Financeiro")
+
+@st.cache_data(ttl=3600)
+def load_data_from_drive():
+    if "DRIVE_URL" not in st.secrets:
+        st.error("❌ Chave 'DRIVE_URL' não encontrada no secrets.toml.")
+        return None
+        
+    try:
+        url = st.secrets["DRIVE_URL"]
+        
+        # 1. Cria o contexto que ignora a verificação de certificado
+        context = ssl._create_unverified_context()
+        
+        # 2. Abre a URL usando esse contexto
+        # O 'with' garante que a conexão seja fechada após a leitura
+        with urllib.request.urlopen(url, context=context) as response:
+            # 3. O pandas lê diretamente o objeto de resposta
+            df_drive = pd.read_csv(response)
+            
+        if df_drive.empty:
+            st.error("⚠️ A aba selecionada parece estar vazia. Verifique o GID.")
+            return None
+            
+        return df_drive
+
+    except Exception as e:
+        st.error(f"⚠️ Erro ao acessar a planilha: {e}")
+        return None
 
 def gerar_excel_completo(df_plot, hipoteses, metricas):
     output = io.BytesIO()
@@ -210,15 +240,10 @@ CORES_GRUPOS = {
 # ==============================================================================
 # FASE 1: UPLOAD E PREPARAÇÃO DA BASE
 # ==============================================================================
-uploaded_file = st.sidebar.file_uploader("📂 Envie a Tabela-mãe (CSV)", type=['csv'])
+df_bruto = load_data_from_drive()
 
-if uploaded_file:
-    with st.spinner('Lendo e limpando os dados...'):
-        if uploaded_file.name.endswith('.csv'):
-            df_bruto = pd.read_csv(uploaded_file)
-        else:
-            df_bruto = pd.read_excel(uploaded_file)
-
+if df_bruto is not None:
+        # 1. Limpeza inicial
         df = limpar_nomes_colunas(df_bruto)
 
         # Transformações Numéricas
@@ -322,6 +347,12 @@ if uploaded_file:
         # Mostrar colunas para debug, caso necessário
         with st.sidebar.expander("🛠️ Ver Colunas Processadas"):
             st.write(df.columns.tolist())
+
+        with st.sidebar:
+            st.success("✅ Dados carregados via Google Drive")
+            if st.button("🔄 Forçar Atualização dos Dados"):
+                st.cache_data.clear()
+                st.rerun()
 
         # --- NAVEGAÇÃO POR ABAS ATUALIZADA ---
         tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -515,7 +546,7 @@ if uploaded_file:
             """)
 
             # --- 1. EXPLORADOR 3D (FOCO EM DISTINÇÃO VISUAL) ---
-            st.subheader("🛠️ Explorador Comportamental 3D (Alto Contraste)")
+            st.subheader("🛠️ Explorador Comportamental 3D")
             st.info("""
             **Dica de Leitura:** Procure por agrupamentos de cores isoladas. A distinção de cores foi aumentada 
             para facilitar a identificação de clusters comportamentais específicos por grupo de intervenção.
@@ -574,7 +605,7 @@ if uploaded_file:
                 color_discrete_map=PALETA_DISTINTA_3D, # <-- Usando a nova paleta aqui
                 opacity=0.75, # Levemente mais opaco para melhor distinção
                 hover_data=['id', 'grupo'],
-                title=f"Espaço Comportamental Real (N={len(df)} | Alto Contraste)"
+                title=f"Espaço Comportamental Real (N={len(df)})"
             )
 
             # Melhoria visual dos pontos: adiciona bordas para separação
@@ -655,6 +686,80 @@ if uploaded_file:
 
             st.divider()
 
+
+            # --- 3. LABORATÓRIO DE SEGMENTAÇÃO (HETEROGENEIDADE) ---
+            st.divider()
+            st.subheader("🔍 Laboratório de Segmentação Qualitativa")
+            
+            st.info("""
+            **Objetivo de Doutorado:** Esta ferramenta permite analisar a heterogeneidade do impacto. 
+            Verifique se a intervenção (ex: Mentoria) teve efeitos diferentes dependendo do 
+            perfil da empreendedora (ex: tempo de negócio ou nível de estresse).
+            """)
+
+            # 1. Mapeamento de Atributos Qualitativos (Eixo X ou Segmentos)
+            atributos_qualitativos = {
+                "Tempo de Negócio": "e_o_seu_negocio_existe_ha_quanto_tempo_",
+                "Atividade Principal": "pra_gente_entender_melhor_o_seu_ramo_qual_e_a_atividade_principal_do_seu_negocio_",
+                "Tamanho da Equipe": "voce_toca_o_negocio_sozinha_ou_tem_mais_gente_nesse_corre_com_voce",
+                "Estresse Financeiro": "estresse_financeiro",
+                "Escolaridade": "nivel_de_escolaridade",
+                "Controle de Gastos (Auto-declarado)": "controle_de_gastos",
+                "Separa PF da PJ": "separa_dinheiro_pessoal_do_negocio"
+            }
+
+            # 2. Mapeamento de Métricas de Engajamento (Eixo Y)
+            metricas_engajamento = {
+                "Taxa Adesão Geral": "taxa_adesao_num",
+                "Taxa Transações": "taxa_transacoes_num",
+                "Taxa Metas": "taxa_metas_num",
+                "Taxa Conjunta": "taxa_conjunta_num",
+                "Qtd. de Transações": "quantidade_de_transacoes",
+                "Qtd. de Metas": "quantidade_de_metas_registradas",
+                "Visualizações Painel": "quantidade_de_visualizacoes_painel"
+            }
+
+            col_lab1, col_lab2 = st.columns(2)
+            with col_lab1:
+                segmento_sel = st.selectbox("Selecione o Perfil Qualitativo (X):", list(atributos_qualitativos.keys()), key="seg_x")
+            with col_lab2:
+                metrica_sel = st.selectbox("Selecione a Métrica de Engajamento (Y):", list(metricas_engajamento.keys()), key="seg_y")
+
+            # 3. Construção do Gráfico de Boxplot Facetado
+            # Usamos df_plot para ter os nomes de grupos bonitos e as métricas convertidas
+            
+            var_x = atributos_qualitativos[segmento_sel]
+            var_y = metricas_engajamento[metrica_sel]
+
+            # Filtramos NaNs para não poluir o gráfico
+            df_seg = df_plot.dropna(subset=[var_x, var_y])
+
+            fig_seg = px.box(
+                df_seg,
+                x=var_x,
+                y=var_y,
+                color="grupo_comparacao",
+                color_discrete_map=CORES_GRUPOS,
+                facet_col="grupo_comparacao", # Cria um mini-gráfico para cada grupo
+                facet_col_wrap=3, # Quebra a linha a cada 3 grupos
+                points="outliers", # Mostra apenas os pontos fora da curva
+                title=f"Distribuição de {metrica_sel} por {segmento_sel}",
+                labels={var_x: segmento_sel, var_y: metrica_sel}
+            )
+
+            # Ajustes estéticos
+            fig_seg.update_layout(showlegend=False, height=600)
+            if "Taxa" in metrica_sel:
+                fig_seg.update_layout(yaxis_tickformat='.0%')
+            
+            st.plotly_chart(fig_seg, use_container_width=True)
+
+            with st.expander("💡 Como interpretar esta análise?"):
+                st.markdown(f"""
+                * **Consistência**: Se em todos os grupos as empreendedoras com 'Escolaridade Alta' performam melhor, a escolaridade é um preditor de sucesso independente da intervenção.
+                * **Efeito Moderador**: Se no grupo 'Controle' o '{segmento_sel}' não faz diferença, mas no grupo 'Mentoria' um perfil específico decola, você descobriu que a mentoria é especialmente eficaz para aquele tipo de empreendedora.
+                * **Dispersão**: Boxplots altos (caixas compridas) indicam que o comportamento do grupo é muito variado, sugerindo que outros fatores não mapeados estão influenciando o hábito.
+                """)
 
 
             # --- 2. CURVA DE SOBREVIVÊNCIA DO HÁBITO (ATUALIZADA COM TODOS OS GRUPOS) ---
@@ -825,4 +930,4 @@ if uploaded_file:
             except Exception as e:
                 st.error(f"Erro ao calcular estatísticas de conversão: {e}")
 else:
-    st.info("👈 Por favor, faça o upload do arquivo Tabela-mãe (.csv) no menu lateral para iniciar.")
+    st.warning("Aguardando conexão com a base de dados do Google Drive...")
