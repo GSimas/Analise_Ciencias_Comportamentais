@@ -509,90 +509,237 @@ if uploaded_file:
         # --- ABA 4: COMPORTAMENTO AVANÇADO ---
         with tab4:
             st.header("Análises Comportamentais Avançadas")
-            
-            # --- 1. EXPLORADOR 3D ---
-            st.subheader("🛠️ Explorador Comportamental 3D")
-            st.info("""
-            **Como ler este gráfico:** Cada ponto é uma empreendedora. A posição nos eixos mostra o nível de engajamento 
-            em três métricas simultâneas. Procure por agrupamentos de cores isoladas.
+            st.markdown("""
+            Esta aba permite explorar o comportamento das empreendedoras além das médias simples, 
+            identificando clusters de uso e profundidade de adoção.
             """)
 
+            # --- 1. EXPLORADOR 3D (FOCO EM DISTINÇÃO VISUAL) ---
+            st.subheader("🛠️ Explorador Comportamental 3D (Alto Contraste)")
+            st.info("""
+            **Dica de Leitura:** Procure por agrupamentos de cores isoladas. A distinção de cores foi aumentada 
+            para facilitar a identificação de clusters comportamentais específicos por grupo de intervenção.
+            """)
+
+            # 1. CRIANDO HIERARQUIA DE GRUPOS EXCLUSIVOS (Mantido para unicidade de pontos)
+            condicoes_unicas = [
+                (df['G3'] == 1),
+                (df['G5'] == 1),
+                (df['G4'] == 1),
+                (df['G1'] == 1),
+                (df['G0'] == 1)
+            ]
+            labels_unicos = [
+                "G3 (Mentoria)", 
+                "G5 (Convidadas)", 
+                "G4 (Não Convidadas)", 
+                "G1 (Formal)", 
+                "G0 (Controle)"
+            ]
+            df['grupo_3d_exclusivo'] = np.select(condicoes_unicas, labels_unicos, default='G2 (Outras fora do G3, G4 e G5)')
+
+            
+            PALETA_DISTINTA_3D = {
+                "G3 (Mentoria)": "#E41A1C",       # Vermelho (Alto impacto)
+                "G5 (Convidadas)": "#377EB8",    # Azul (Forte)
+                "G4 (Não Convidadas)": "#FF7F00",# Laranja (Vibrante)
+                "G1 (Formal)": "#4DAF4A",        # Verde (Comparação)
+                "G0 (Controle)": "#984EA3",       # Roxo (Controle)
+                "G2 (Outras fora do G3, G4 e G5)": "#AAAAAA"              # Cinza (Baseline)
+            }
+
+            # 2. SELETORES DE EIXO (Mantidos com chaves únicas)
             opcoes_3d = {
-                "Taxa Adesão (Semanas)": "taxa_adesao_num",
+                "Taxa Adesão (Semanas Ativas)": "taxa_adesao_num",
+                "Taxa Ativas Transações": "taxa_transacoes_num",
+                "Taxa Ativas Metas": "taxa_metas_num",
+                "Taxa Ativas Transações + Metas": "taxa_conjunta_num",
+                "Qtd. Total Transações": "quantidade_de_transacoes",
+                "Qtd. Total Metas Registradas": "quantidade_de_metas_registradas",
+                "Qtd. Total Visualizações Painel": "quantidade_de_visualizacoes_painel"
+            }
+
+            c1, c2, c3 = st.columns(3)
+            with c1: x_lab = st.selectbox("Eixo X:", list(opcoes_3d.keys()), index=0, key="x_3d_distinto")
+            with c2: y_lab = st.selectbox("Eixo Y:", list(opcoes_3d.keys()), index=4, key="y_3d_distinto")
+            with c3: z_lab = st.selectbox("Eixo Z:", list(opcoes_3d.keys()), index=6, key="z_3d_distinto")
+
+            # 3. CONSTRUÇÃO DO PLOT (AGORA COM A NOVA PALETA DISTINTA)
+            fig_3d = px.scatter_3d(
+                df, # Usa o DF original para unicidade de pontos
+                x=opcoes_3d[x_lab], 
+                y=opcoes_3d[y_lab], 
+                z=opcoes_3d[z_lab],
+                color='grupo_3d_exclusivo', 
+                color_discrete_map=PALETA_DISTINTA_3D, # <-- Usando a nova paleta aqui
+                opacity=0.75, # Levemente mais opaco para melhor distinção
+                hover_data=['id', 'grupo'],
+                title=f"Espaço Comportamental Real (N={len(df)} | Alto Contraste)"
+            )
+
+            # Melhoria visual dos pontos: adiciona bordas para separação
+            fig_3d.update_traces(marker=dict(size=6, line=dict(width=1, color='DarkSlateGrey')))
+            fig_3d.update_layout(margin=dict(l=0, r=0, b=0, t=30))
+            
+            # Formatação condicional de taxas
+            if "Taxa" in x_lab: fig_3d.update_layout(scene=dict(xaxis=dict(tickformat=".0%")))
+            if "Taxa" in y_lab: fig_3d.update_layout(scene=dict(yaxis=dict(tickformat=".0%")))
+            if "Taxa" in z_lab: fig_3d.update_layout(scene=dict(zaxis=dict(tickformat=".0%")))
+
+            st.plotly_chart(fig_3d, use_container_width=True)
+            
+            st.success(f"📌 Total de empreendedoras únicas plotadas: {len(df)}")
+
+            st.divider()
+
+            # --- 2. MATRIZ DE CORRELAÇÃO (HEATMAP INTERATIVO) ---
+            st.subheader("🌡️ Matriz de Correlação Comportamental")
+            
+            st.info("""
+            **Como ler o Heatmap:** A cor indica a força da relação entre duas métricas. 
+            Valores próximos de **1.0 (Amarelo/Quente)** indicam que quando uma métrica sobe, a outra também sobe. 
+            Valores próximos de **0 (Roxo/Frio)** indicam que não há relação clara entre elas.
+            """)
+
+            # 1. Lista de métricas numéricas para correlação
+            opcoes_corr = {
+                "Taxa Adesão": "taxa_adesao_num",
                 "Taxa Transações": "taxa_transacoes_num",
                 "Taxa Metas": "taxa_metas_num",
                 "Taxa Conjunta": "taxa_conjunta_num",
                 "Qtd. Transações": "quantidade_de_transacoes",
                 "Qtd. Metas": "quantidade_de_metas_registradas",
-                "Uso do Painel": "quantidade_de_visualizacoes_painel"
+                "Uso do Painel": "quantidade_de_visualizacoes_painel",
+                "Presença Mentoria": "presenca_mentoria"
             }
 
-            c1, c2, c3 = st.columns(3)
-            with c1: x_lab = st.selectbox("Eixo X:", list(opcoes_3d.keys()), index=0, key="x_3d")
-            with c2: y_lab = st.selectbox("Eixo Y:", list(opcoes_3d.keys()), index=4, key="y_3d")
-            with c3: z_lab = st.selectbox("Eixo Z:", list(opcoes_3d.keys()), index=6, key="z_3d")
-
-            fig_3d = px.scatter_3d(
-                df_plot,
-                x=opcoes_3d[x_lab], y=opcoes_3d[y_lab], z=opcoes_3d[z_lab],
-                color='grupo_comparacao',
-                color_discrete_map=CORES_GRUPOS,
-                opacity=0.7, hover_data=['id'],
-                title=f"Espaço de Uso: {x_lab} / {y_lab} / {z_lab}"
+            # 2. Multiselect para o usuário escolher o que correlacionar
+            metricas_selecionadas = st.multiselect(
+                "Selecione as métricas para a matriz de correlação:",
+                options=list(opcoes_corr.keys()),
+                default=list(opcoes_corr.keys())[:5], # Começa com as 5 primeiras
+                key="corr_multiselect"
             )
-            fig_3d.update_traces(marker=dict(size=5))
-            fig_3d.update_layout(margin=dict(l=0, r=0, b=0, t=30))
-            st.plotly_chart(fig_3d, use_container_width=True)
+
+            if len(metricas_selecionadas) > 1:
+                # Mapeia os nomes amigáveis para os nomes das colunas
+                cols_corr = [opcoes_corr[m] for m in metricas_selecionadas]
+                
+                # Calcula a matriz de correlação de Pearson
+                # Usamos o df original para evitar duplicatas de usuárias
+                matriz_corr = df[cols_corr].corr(method='pearson')
+
+                # 3. Criação do Heatmap com Plotly
+                fig_heat = px.imshow(
+                    matriz_corr,
+                    text_auto=".2f", # Mostra os valores dentro das células
+                    aspect="auto",
+                    color_continuous_scale='Viridis', # Escala de cores profissional
+                    labels=dict(color="Correlação"),
+                    x=metricas_selecionadas,
+                    y=metricas_selecionadas,
+                    title="Correlação de Pearson entre Métricas Selecionadas"
+                )
+
+                fig_heat.update_layout(margin=dict(l=0, r=0, b=0, t=40))
+                st.plotly_chart(fig_heat, use_container_width=True)
+
+                with st.expander("🔍 Interpretando as Correlações"):
+                    st.markdown("""
+                    * **Correlação Alta (> 0.7)**: Indica um vínculo forte. Se o 'Uso do Painel' tem alta correlação com 'Taxa de Metas', as intervenções que levam ao painel são cruciais para o hábito estratégico.
+                    * **Correlação Baixa (< 0.3)**: Indica que os comportamentos são independentes.
+                    * **Diagonal Principal**: Sempre será 1.0, pois representa a métrica correlacionada com ela mesma.
+                    """)
+            else:
+                st.warning("Selecione pelo menos duas métricas para gerar a matriz de correlação.")
 
             st.divider()
 
-            # --- 2. CURVA DE SOBREVIVÊNCIA DO HÁBITO ---
+
+
+            # --- 2. CURVA DE SOBREVIVÊNCIA DO HÁBITO (ATUALIZADA COM TODOS OS GRUPOS) ---
             st.subheader("📈 Curva de Sobrevivência do Hábito")
             
-            # Criamos a coluna de labels para o gráfico com base nas flags existentes
-            condicoes = [
+            # 1. CRIANDO A HIERARQUIA PARA O GRÁFICO DE LINHAS
+            # Note a lógica para o G2 (Outras): estar no G2 mas NÃO estar nos subgrupos G3, G4 ou G5
+            condicoes_surv = [
                 (df['G3'] == 1),
-                (df['G2'] == 1),
+                (df['G5'] == 1),
+                (df['G4'] == 1),
+                ((df['G2'] == 1) & (df['G3'] == 0) & (df['G4'] == 0) & (df['G5'] == 0)),
                 (df['G1'] == 1),
                 (df['G0'] == 1)
             ]
-            labels = ["G3 (Mentoria + IA)", "G2 (Acolhedora)", "G1 (Formal)", "G0 (Controle)"]
-            df['grupo_survival'] = np.select(condicoes, labels, default='Outros')
-
-            # Filtramos apenas quem pertence a um desses 4 grupos
-            df_deep = df[df['grupo_survival'] != 'Outros'].copy()
             
-            # Buscamos as colunas de interações semanais
+            labels_surv = [
+                "G3 (Mentoria)", 
+                "G5 (Convidadas)", 
+                "G4 (Não Convidadas)", 
+                "G2 (Outras/Acolhedor)", 
+                "G1 (Formal)", 
+                "G0 (Controle)"
+            ]
+            
+            df['grupo_survival'] = np.select(condicoes_surv, labels_surv, default='IGNORAR')
+
+            # 2. FILTRAGEM E PREPARAÇÃO (TIDY DATA)
+            df_deep = df[df['grupo_survival'] != 'IGNORAR'].copy()
             cols_sem = [c for c in df_deep.columns if 'interacoes_semana_' in c]
             
             if cols_sem:
-                # Transformamos para formato longo (Tidy Data)
-                df_t = df_deep.melt(id_vars=['grupo_survival'], value_vars=cols_sem, var_name='semana', value_name='interacoes')
+                # Transformar para formato longo (long format)
+                df_t = df_deep.melt(
+                    id_vars=['grupo_survival'], 
+                    value_vars=cols_sem, 
+                    var_name='semana', 
+                    value_name='interacoes'
+                )
+                
+                # Extrair o número da semana
                 df_t['sem_num'] = df_t['semana'].str.extract(r'(\d+)').astype(int)
                 
-                # Calculamos a média de usuárias ativas (interações > 0) por semana e grupo
-                df_t_agg = df_t.groupby(['grupo_survival', 'sem_num'])['interacoes'].apply(lambda x: (x > 0).mean()).reset_index()
-                
+                # Calcular a taxa de retenção (% de ativas com interação > 0)
+                df_t_agg = df_t.groupby(['grupo_survival', 'sem_num'])['interacoes'].apply(
+                    lambda x: (x > 0).mean()
+                ).reset_index()
+
+                # 3. DEFINIÇÃO DE CORES (Mantendo a paleta distinta do 3D para consistência)
+                PALETA_SURVIVAL = {
+                    "G3 (Mentoria)": "#E41A1C",       # Vermelho
+                    "G5 (Convidadas)": "#377EB8",    # Azul
+                    "G4 (Não Convidadas)": "#FF7F00",# Laranja
+                    "G2 (Outras/Acolhedor)": "#FFFF33", # Amarelo (ou outra cor distinta)
+                    "G1 (Formal)": "#4DAF4A",        # Verde
+                    "G0 (Controle)": "#984EA3"        # Roxo
+                }
+
+                # 4. PLOTAGEM DA CURVA
                 fig_t = px.line(
-                    df_t_agg, x="sem_num", y="interacoes", color="grupo_survival", markers=True,
-                    color_discrete_map={
-                        "G3 (Mentoria + IA)": "#000000",
-                        "G2 (Acolhedora)": "#009E73",
-                        "G1 (Formal)": "#0072B2",
-                        "G0 (Controle)": "#D55E00"
-                    },
-                    title="Retenção Semanal: % de Empreendedoras Ativas"
+                    df_t_agg, 
+                    x="sem_num", 
+                    y="interacoes", 
+                    color="grupo_survival", 
+                    markers=True,
+                    color_discrete_map=PALETA_SURVIVAL,
+                    title="Sobrevivência do Hábito: Proporção de Usuárias Ativas por Semana"
                 )
-                fig_t.update_layout(yaxis_tickformat='.0%', yaxis_title="% Ativas", xaxis_title="Semana do Projeto")
+                
+                fig_t.update_layout(
+                    yaxis_tickformat='.0%', 
+                    yaxis_title="% de Empreendedoras Ativas", 
+                    xaxis_title="Semana de Participação",
+                    legend_title="Grupos:",
+                    hovermode="x unified"
+                )
+                
+                # Ajuste para mostrar todas as semanas no eixo X
+                fig_t.update_xaxes(dtick=1)
+                
                 st.plotly_chart(fig_t, use_container_width=True)
                 
-                st.info("""
-                **Análise da Curva:** Grupos que mantêm a linha "alta" e estável ao longo das semanas 
-                conseguiram formar um hábito financeiro sustentável. Quedas bruscas sugerem que a 
-                intervenção perdeu o efeito ou o canal (WhatsApp) saturou.
-                """)
+
             else:
-                st.warning("Colunas 'interacoes_semana_X' não detectadas na tabela.")
+                st.warning("Atenção: Não foram encontradas colunas de interações semanais na planilha.")
 
             st.divider()
 
