@@ -422,55 +422,116 @@ if uploaded_file:
         with tab4:
             st.header("Análises Comportamentais Avançadas")
             
-            # G1: Curva de Sobrevivência
-            st.subheader("1. Curva de Sobrevivência do Hábito")
-            df_deep = df[(df['G0']==1) | (df['G1']==1) | (df['G2']==1) | (df['G3']==1)].copy()
-            cond_plot = [df_deep['G3']==1, df_deep['G2']==1, df_deep['G1']==1, df_deep['G0']==1]
-            choices_plot = ["G3 (Mentoria + IA)", "G2 (Acolhedora)", "G1 (Formal)", "G0 (Controle)"]
-            df_deep['grupo_plot'] = np.select(cond_plot, choices_plot, default='Outros')
-            
-            cols_semana = [c for c in df_deep.columns if 'interacoes_semana_' in c]
-            if cols_semana:
-                df_tempo = df_deep.melt(id_vars=['grupo_plot'], value_vars=cols_semana, var_name='semana_nome', value_name='interacoes')
-                df_tempo['semana_num'] = df_tempo['semana_nome'].str.extract(r'(\d+)').astype(float)
-                df_tempo['ativa'] = np.where(df_tempo['interacoes'] > 0, 1, 0)
-                
-                df_tempo_agg = df_tempo.groupby(['grupo_plot', 'semana_num'])['ativa'].mean().reset_index()
-                
-                fig_tempo = px.line(df_tempo_agg, x="semana_num", y="ativa", color="grupo_plot", markers=True,
-                                    title="Sobrevivência do Hábito ao Longo das Semanas")
-                fig_tempo.update_layout(yaxis_tickformat='.0%', yaxis_title="% de Empreendedoras Ativas")
-                st.plotly_chart(fig_tempo, use_container_width=True)
-            else:
-                st.warning("Colunas 'interacoes_semana_X' não encontradas.")
+            # --- 1. EXPLORADOR 3D ---
+            st.subheader("🛠️ Explorador Comportamental 3D")
+            st.info("""
+            **Como ler este gráfico:** Cada ponto é uma empreendedora. A posição nos eixos mostra o nível de engajamento 
+            em três métricas simultâneas. Procure por agrupamentos de cores isoladas.
+            """)
 
-            # G2: Ecossistema de Uso e G4: Conversão (Combinados)
+            opcoes_3d = {
+                "Taxa Adesão (Semanas)": "taxa_adesao_num",
+                "Taxa Transações": "taxa_transacoes_num",
+                "Taxa Metas": "taxa_metas_num",
+                "Taxa Conjunta": "taxa_conjunta_num",
+                "Qtd. Transações": "quantidade_de_transacoes",
+                "Qtd. Metas": "quantidade_de_metas_registradas",
+                "Uso do Painel": "quantidade_de_visualizacoes_painel"
+            }
+
+            c1, c2, c3 = st.columns(3)
+            with c1: x_lab = st.selectbox("Eixo X:", list(opcoes_3d.keys()), index=0, key="x_3d")
+            with c2: y_lab = st.selectbox("Eixo Y:", list(opcoes_3d.keys()), index=4, key="y_3d")
+            with c3: z_lab = st.selectbox("Eixo Z:", list(opcoes_3d.keys()), index=6, key="z_3d")
+
+            fig_3d = px.scatter_3d(
+                df_plot,
+                x=opcoes_3d[x_lab], y=opcoes_3d[y_lab], z=opcoes_3d[z_lab],
+                color='grupo_comparacao',
+                color_discrete_map=CORES_GRUPOS,
+                opacity=0.7, hover_data=['id'],
+                title=f"Espaço de Uso: {x_lab} / {y_lab} / {z_lab}"
+            )
+            fig_3d.update_traces(marker=dict(size=5))
+            fig_3d.update_layout(margin=dict(l=0, r=0, b=0, t=30))
+            st.plotly_chart(fig_3d, use_container_width=True)
+
+            st.divider()
+
+            # --- 2. CURVA DE SOBREVIVÊNCIA DO HÁBITO ---
+            st.subheader("📈 Curva de Sobrevivência do Hábito")
+            
+            # Criamos a coluna de labels para o gráfico com base nas flags existentes
+            condicoes = [
+                (df['G3'] == 1),
+                (df['G2'] == 1),
+                (df['G1'] == 1),
+                (df['G0'] == 1)
+            ]
+            labels = ["G3 (Mentoria + IA)", "G2 (Acolhedora)", "G1 (Formal)", "G0 (Controle)"]
+            df['grupo_survival'] = np.select(condicoes, labels, default='Outros')
+
+            # Filtramos apenas quem pertence a um desses 4 grupos
+            df_deep = df[df['grupo_survival'] != 'Outros'].copy()
+            
+            # Buscamos as colunas de interações semanais
+            cols_sem = [c for c in df_deep.columns if 'interacoes_semana_' in c]
+            
+            if cols_sem:
+                # Transformamos para formato longo (Tidy Data)
+                df_t = df_deep.melt(id_vars=['grupo_survival'], value_vars=cols_sem, var_name='semana', value_name='interacoes')
+                df_t['sem_num'] = df_t['semana'].str.extract(r'(\d+)').astype(int)
+                
+                # Calculamos a média de usuárias ativas (interações > 0) por semana e grupo
+                df_t_agg = df_t.groupby(['grupo_survival', 'sem_num'])['interacoes'].apply(lambda x: (x > 0).mean()).reset_index()
+                
+                fig_t = px.line(
+                    df_t_agg, x="sem_num", y="interacoes", color="grupo_survival", markers=True,
+                    color_discrete_map={
+                        "G3 (Mentoria + IA)": "#000000",
+                        "G2 (Acolhedora)": "#009E73",
+                        "G1 (Formal)": "#0072B2",
+                        "G0 (Controle)": "#D55E00"
+                    },
+                    title="Retenção Semanal: % de Empreendedoras Ativas"
+                )
+                fig_t.update_layout(yaxis_tickformat='.0%', yaxis_title="% Ativas", xaxis_title="Semana do Projeto")
+                st.plotly_chart(fig_t, use_container_width=True)
+                
+                st.info("""
+                **Análise da Curva:** Grupos que mantêm a linha "alta" e estável ao longo das semanas 
+                conseguiram formar um hábito financeiro sustentável. Quedas bruscas sugerem que a 
+                intervenção perdeu o efeito ou o canal (WhatsApp) saturou.
+                """)
+            else:
+                st.warning("Colunas 'interacoes_semana_X' não detectadas na tabela.")
+
+            st.divider()
+
+            # --- 3. MATURIDADE E CONVERSÃO ---
             col_eco1, col_eco2 = st.columns(2)
             
             with col_eco1:
-                st.subheader("2. Maturidade de Gestão Financeira")
-                # Médias
+                st.subheader("💎 Maturidade de Gestão")
                 resumo_eco = df_plot.groupby('grupo_comparacao')[['quantidade_de_transacoes', 'quantidade_de_visualizacoes_painel']].mean().reset_index()
-                resumo_eco['painel_ajustado'] = resumo_eco['quantidade_de_visualizacoes_painel'] * 5
+                resumo_eco['painel_aj_5x'] = resumo_eco['quantidade_de_visualizacoes_painel'] * 5
                 
                 fig_eco = go.Figure()
                 fig_eco.add_trace(go.Bar(x=resumo_eco['grupo_comparacao'], y=resumo_eco['quantidade_de_transacoes'], name="Transações", marker_color="#B3CDE3"))
-                fig_eco.add_trace(go.Bar(x=resumo_eco['grupo_comparacao'], y=resumo_eco['painel_ajustado'], name="Uso do Painel (*Ajustado)", marker_color="#8856A7"))
-                fig_eco.update_layout(barmode='group')
+                fig_eco.add_trace(go.Bar(x=resumo_eco['grupo_comparacao'], y=resumo_eco['painel_aj_5x'], name="Uso Painel (Ajustado 5x)", marker_color="#8856A7"))
+                fig_eco.update_layout(barmode='group', title="Média de Ações por Usuária", margin=dict(t=40, b=0))
                 st.plotly_chart(fig_eco, use_container_width=True)
 
             with col_eco2:
-                st.subheader("3. Taxa de Conversão (% Populacional)")
-                # Taxas de conversão
-                df_plot['fez_transacao'] = (df_plot['quantidade_de_transacoes'] > 0).astype(int)
-                df_plot['viu_painel'] = (df_plot['quantidade_de_visualizacoes_painel'] > 0).astype(int)
-                
-                resumo_conv = df_plot.groupby('grupo_comparacao')[['fez_transacao', 'viu_painel']].mean().reset_index()
+                st.subheader("🎯 Taxa de Conversão Real")
+                df_plot['fez_algo'] = (df_plot['quantidade_de_transacoes'] > 0).astype(int)
+                df_plot['viu_algo'] = (df_plot['quantidade_de_visualizacoes_painel'] > 0).astype(int)
+                resumo_conv = df_plot.groupby('grupo_comparacao')[['fez_algo', 'viu_algo']].mean().reset_index()
                 
                 fig_conv = go.Figure()
-                fig_conv.add_trace(go.Bar(x=resumo_conv['grupo_comparacao'], y=resumo_conv['fez_transacao'], name="Fizeram Transações", marker_color="#B3CDE3", text=resumo_conv['fez_transacao'].apply(lambda x: f"{x:.1%}")))
-                fig_conv.add_trace(go.Bar(x=resumo_conv['grupo_comparacao'], y=resumo_conv['viu_painel'], name="Viram Painel", marker_color="#8856A7", text=resumo_conv['viu_painel'].apply(lambda x: f"{x:.1%}")))
-                fig_conv.update_layout(barmode='group', yaxis_tickformat='.0%')
+                fig_conv.add_trace(go.Bar(x=resumo_conv['grupo_comparacao'], y=resumo_conv['fez_algo'], name="Transações", marker_color="#B3CDE3"))
+                fig_conv.add_trace(go.Bar(x=resumo_conv['grupo_comparacao'], y=resumo_conv['viu_algo'], name="Painel", marker_color="#8856A7"))
+                fig_conv.update_layout(barmode='group', yaxis_tickformat='.0%', title="% da Base que Adotou", margin=dict(t=40, b=0))
                 st.plotly_chart(fig_conv, use_container_width=True)
 
         # --- ABA 5: INVESTIGAÇÃO TOM DE VOZ ---
