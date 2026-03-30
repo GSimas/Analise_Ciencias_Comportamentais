@@ -6,3 +6,5 @@ statsmodels
 pingouin
 scipy
 openpyxl
+fpdf2
+xlsxwriter

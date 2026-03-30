@@ -7,11 +7,83 @@ import statsmodels.formula.api as smf
 import pingouin as pg
 from scipy.stats import fisher_exact
 
+import io
+from fpdf import FPDF
+
 # Configuração da Página
 st.set_page_config(page_title="Relatório Ciências Comportamentais", layout="wide")
 st.title("📊 Análise Comportamental - Inclusão Econômica")
 st.markdown("Projeto Sebrae / CINCO / Impact Hub - Avaliação de Intervenções e Hábito Financeiro")
 
+def gerar_excel_completo(df_plot, hipoteses, metricas):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        # 1. Aba de Resumo Descritivo
+        df_descritivo_full = []
+        for nome_label, col_base in metricas.items():
+            resumo = df_plot.groupby('grupo_comparacao')[col_base].agg(['count', 'mean', 'std', 'median']).reset_index()
+            resumo['Métrica'] = nome_label
+            df_descritivo_full.append(resumo)
+        pd.concat(df_descritivo_full).to_excel(writer, sheet_name='Estatísticas_Descritivas', index=False)
+        
+        # 2. Aba de Regressões (Roda todas as H de uma vez para o arquivo)
+        lista_regressoes = []
+        for h_nome, (ref, teste) in hipoteses.items():
+            tab, d, insight = testar_hipotese(df_plot, 'taxa_adesao_num', ref, teste)
+            tab['Hipótese_Analizada'] = h_nome
+            tab['Cohen_d'] = d
+            lista_regressoes.append(tab)
+        pd.concat(lista_regressoes).to_excel(writer, sheet_name='Resultados_Hipoteses', index=False)
+        
+        # 3. Aba de Dados Brutos
+        df_plot.to_excel(writer, sheet_name='Dados_Base', index=False)
+    return output.getvalue()
+
+def gerar_pdf_relatorio(df_plot, hipoteses):
+    pdf = FPDF()
+    pdf.add_page()
+    # Usar 'latin-1' ou 'UTF-8' dependendo da versão, fpdf2 suporta UTF-8 por padrão
+    pdf.set_font("helvetica", "B", 16)
+    pdf.cell(0, 10, "Sumario Executivo - Ciencias Comportamentais", ln=True, align='C')
+    pdf.ln(10)
+
+    for h_nome, (ref, teste) in hipoteses.items():
+        tab, d, insight = testar_hipotese(df_plot, 'taxa_adesao_num', ref, teste)
+        pdf.set_font("helvetica", "B", 12)
+        pdf.cell(0, 10, h_nome.encode('latin-1', 'replace').decode('latin-1'), ln=True)
+        pdf.set_font("helvetica", "", 10)
+        
+        # Limpar emojis e markdown para não quebrar o PDF
+        txt_limpo = insight.replace("**", "").replace("✅", "").replace("⚠️", "").replace("⚖️", "")
+        pdf.multi_cell(0, 5, txt_limpo.encode('latin-1', 'replace').decode('latin-1'))
+        pdf.cell(0, 10, f"Cohen's d: {d:.3f}", ln=True)
+        pdf.ln(5)
+    
+    return pdf.output()
+
+def gerar_pdf_relatorio(df_plot, hipoteses):
+    """Gera um PDF executivo com os principais insights."""
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(0, 10, "Relatorio Executivo - Ciencias Comportamentais", ln=True, align='C')
+    pdf.set_font("Arial", "", 10)
+    pdf.cell(0, 10, "Parceria: Sebrae / CINCO / Impact Hub", ln=True, align='C')
+    pdf.ln(10)
+
+    for h_nome, (ref, teste) in hipoteses.items():
+        tab, d, insight = testar_hipotese(df_plot, 'taxa_adesao_num', ref, teste)
+        pdf.set_font("Arial", "B", 12)
+        pdf.cell(0, 10, f"Analise: {h_nome}", ln=True)
+        pdf.set_font("Arial", "", 10)
+        
+        # Limpa markdown do insight para o PDF
+        txt_limpo = insight.replace("**", "").replace("✅", "").replace("⚠️", "").replace("⚖️", "")
+        pdf.multi_cell(0, 5, txt_limpo)
+        pdf.cell(0, 5, f"Forca do Efeito (Cohen's d): {d:.3f}", ln=True)
+        pdf.ln(5)
+        
+    return pdf.output()
 
 def check_password():
     """Retorna True se o usuário inseriu a senha correta."""
@@ -66,79 +138,67 @@ def limpar_nomes_colunas(df):
     return df
 
 def testar_hipotese(df, var_dependente, grupo_ref, grupo_teste):
-    """Roda Regressão OLS, limpa os nomes das variáveis e gera interpretação automática."""
+    """Roda Regressão OLS com tratamento de p-valor científico e casos marginais."""
     df_h = df[df['grupo_comparacao'].isin([grupo_ref, grupo_teste])].copy()
     
-    # 1. Regressão e Limpeza da Tabela
+    # 1. Regressão e Limpeza
     formula = f"{var_dependente} ~ C(grupo_comparacao, Treatment(reference='{grupo_ref}'))"
     try:
         model = smf.ols(formula, data=df_h).fit()
-        
-        # Extrai a tabela de coeficientes como DataFrame do Pandas
         tabela_resultados = model.summary2().tables[1].reset_index()
         
-        # Limpa os nomes assustadores do statsmodels
+        # Limpeza de nomes para exibição
         tabela_resultados['index'] = tabela_resultados['index'].str.replace(
             r"C\(grupo_comparacao, Treatment\(reference='.*'\)\)\[T\.", "Efeito: ", regex=True
         ).str.replace(r"\]", "", regex=True)
-        
         tabela_resultados['index'] = tabela_resultados['index'].replace({"Intercept": f"Base ({grupo_ref})"})
         tabela_resultados.rename(columns={'index': 'Variável/Grupo'}, inplace=True)
         
-        # Pega os valores da linha de teste para escrever o texto
         linha_teste = tabela_resultados[tabela_resultados['Variável/Grupo'] == f"Efeito: {grupo_teste}"]
         coef_val = linha_teste['Coef.'].values[0] if not linha_teste.empty else 0
         pval = linha_teste['P>|t|'].values[0] if not linha_teste.empty else 1
-
     except Exception as e:
-        tabela_resultados = pd.DataFrame({'Erro': [str(e)]})
-        coef_val, pval = 0, 1
-        
-    # 2. Tamanho do Efeito (Cohen's d)
+        return pd.DataFrame({'Erro': [str(e)]}), np.nan, "Erro no processamento estatístico."
+
+    # 2. Cohen's d
     g_teste_vals = df_h[df_h['grupo_comparacao'] == grupo_teste][var_dependente].dropna()
     g_ref_vals = df_h[df_h['grupo_comparacao'] == grupo_ref][var_dependente].dropna()
+    d_val = pg.compute_effsize(g_teste_vals, g_ref_vals, eftype='cohen') if len(g_teste_vals) > 0 else np.nan
+
+    # 3. Definição das Variáveis de Texto (Onde estava o erro)
+    direcao = "aumentou" if coef_val > 0 else "reduziu"
+    abs_coef = abs(coef_val) # <--- A definição que faltava
     
-    if len(g_teste_vals) > 0 and len(g_ref_vals) > 0:
-        d_val = pg.compute_effsize(g_teste_vals, g_ref_vals, eftype='cohen')
-    else:
-        d_val = np.nan
-
-    # 3. Gerador de Texto Explicativo (Insights Automatizados)
-    if pd.isna(d_val) or tabela_resultados.empty:
-        texto_insight = "⚠️ Não há dados suficientes nesta amostra para calcular o efeito com segurança."
-    else:
-        # Define a significância
-        if pval < 0.05:
-            sig_texto = "é **estatisticamente significativa**"
-            emoji = "✅"
-        else:
-            sig_texto = "**NÃO** é estatisticamente significativa"
-            emoji = "⚖️"
-            
-        # Define a direção
-        direcao = "aumentou" if coef_val > 0 else "reduziu"
-        
-        # Define o tamanho prático do efeito
-        if abs(d_val) < 0.2:
-            tamanho_efeito = "muito pequeno ou irrelevante"
-        elif abs(d_val) < 0.5:
-            tamanho_efeito = "pequeno"
-        elif abs(d_val) < 0.8:
-            tamanho_efeito = "médio"
-        else:
-            tamanho_efeito = "grande"
-
-        texto_insight = f"{emoji} **O que os dados dizem:** A diferença entre os grupos {sig_texto} (p-valor = {pval:.3f}). "
-        texto_insight += f"Em média, a intervenção do grupo '{grupo_teste}' **{direcao}** o resultado em **{abs(coef_val):.1%}** (pontos percentuais) em relação ao controle. "
-        
-        # Só fala do tamanho do efeito se for significativo
-        if pval < 0.05:
-            texto_insight += f"Na prática, o impacto dessa mudança no comportamento é considerado **{tamanho_efeito}** (Cohen's d = {d_val:.2f})."
-        else:
-            texto_insight += "Como o p-valor é alto, essa diferença pode ser apenas fruto do acaso (ruído estatístico)."
-
-    return tabela_resultados, d_val, texto_insight
+    # Formatação do p-valor (Científica se < 0.001)
+    pval_formatado = f"{pval:.2e}" if pval < 0.001 else f"{pval:.3f}"
     
+    if pval < 0.05:
+        emoji, status = "✅", "é **estatisticamente significativa**"
+    elif 0.05 <= pval < 0.10:
+        emoji, status = "⚠️", "é **marginalmente significativa**"
+    else:
+        emoji, status = "⚖️", "**NÃO** é estatisticamente significativa"
+
+    # 4. Montagem do Texto de Insight
+    texto = f"{emoji} **O que os dados dizem:** A diferença entre os grupos {status} (p-valor = {pval_formatado}).\n\n"
+    texto += f"A intervenção '{grupo_teste}' **{direcao}** o resultado em **{abs_coef:.1%}** (pontos percentuais) em relação ao grupo de referência."
+    
+    if pval < 0.10:
+        # Magnitude do efeito
+        if abs(d_val) < 0.2: mag = "muito pequena"
+        elif abs(d_val) < 0.5: mag = "pequena"
+        elif abs(d_val) < 0.8: mag = "média"
+        else: mag = "grande"
+        
+        texto += f" O impacto prático deste efeito é considerado **{mag}** (Cohen's d = {d_val:.2f})."
+        
+        if 0.05 <= pval < 0.10:
+            texto += "\n\n*Nota: O resultado é marginal (tendência). Pode indicar que o efeito existe, mas o tamanho da amostra (N) limita o poder estatístico.*"
+    else:
+        texto += " Como o p-valor é superior a 0.10, esta variação é tratada estatisticamente como ruído."
+
+    return tabela_resultados, d_val, texto
+
 # --- CORES PADRÃO ---
 CORES_GRUPOS = {
     "G0 (Controle)": "#E0E0E0", "G1 (Formal)": "#B3CDE3", 
@@ -208,9 +268,56 @@ if uploaded_file:
         df_plot = pd.concat(dfs_para_empilhar)
         df_plot['grupo_comparacao'] = pd.Categorical(df_plot['grupo_comparacao'], categories=[m[1] for m in mapa_grupos], ordered=True)
 
+        hipoteses = {
+                "H1: Plano Completo (G3 vs G0)": ("G0 (Controle)", "G3 (Mentoria/Quem Foi)"),
+                "H2a: Informativo vs Controle (G1 vs G0)": ("G0 (Controle)", "G1 (Formal)"),
+                "H2b: Acolhedor vs Controle (G2 vs G0)": ("G0 (Controle)", "G2 (Acolhedor Total)"),
+                "H3: Linguagem (G2 vs G1)": ("G1 (Formal)", "G2 (Acolhedor Total)"),
+                "H4: Poder da Mentoria (G3 vs G4)": ("G4 (Não Convidadas)", "G3 (Mentoria/Quem Foi)"),
+                "H5: Poder do Convite (G5 vs G4)": ("G4 (Não Convidadas)", "G5 (Convidadas)")
+            }
+
         st.sidebar.success("✅ Base processada com sucesso!")
         st.sidebar.subheader("Contagem de Flags")
         st.sidebar.write({m[1]: df[m[0]].sum() for m in mapa_grupos})
+
+        # --- SEÇÃO DE EXPORTAÇÃO NA BARRA LATERAL ---
+        st.sidebar.divider()
+        st.sidebar.header("📤 Exportar Resultados")
+        
+        # Preparar dados para exportação
+        # (Garante que as métricas e hipóteses estejam acessíveis)
+        metricas_exp = {
+            "Taxa Adesão": "taxa_adesao_num",
+            "Taxa Transações": "taxa_transacoes_num",
+            "Taxa Metas": "taxa_metas_num",
+            "Taxa Conjunta": "taxa_conjunta_num"
+        }
+        
+        # Botão Excel
+        try:
+            dados_excel = gerar_excel_completo(df_plot, hipoteses, metricas_exp)
+            st.sidebar.download_button(
+                label="📊 Baixar Relatório Excel (.xlsx)",
+                data=dados_excel,
+                file_name="Relatorio_Comportamental_Completo.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        except Exception as e:
+            st.sidebar.error(f"Erro ao gerar Excel: {e}") # Mostra o erro real aqui
+
+        # Botão PDF
+        try:
+            # Importante: para PDF, o output de bytes pode variar conforme a versão da fpdf2
+            dados_pdf = gerar_pdf_relatorio(df_plot, hipoteses)
+            st.sidebar.download_button(
+                label="📄 Baixar Resumo PDF (.pdf)",
+                data=bytes(dados_pdf) if isinstance(dados_pdf, bytearray) else dados_pdf,
+                file_name="Sumario_Executivo_Comportamental.pdf",
+                mime="application/pdf"
+            )
+        except Exception as e:
+            st.sidebar.error(f"Erro ao gerar PDF: {e}") # Mostra o erro real aqui
 
         # Mostrar colunas para debug, caso necessário
         with st.sidebar.expander("🛠️ Ver Colunas Processadas"):
@@ -325,40 +432,33 @@ if uploaded_file:
         with tab2:
             st.header("Avaliação Consolidada: Taxa de Adesão Geral")
             
-            # Gráfico Boxplot
             fig_adesao = px.box(df_plot, x="grupo_comparacao", y="taxa_adesao_num", color="grupo_comparacao",
                                 color_discrete_map=CORES_GRUPOS, points="all",
                                 title="Impacto das Intervenções na Criação de Hábito Financeiro")
             fig_adesao.update_layout(yaxis_tickformat='.0%', showlegend=False)
             st.plotly_chart(fig_adesao, use_container_width=True)
 
-            # Testes de Hipótese
             st.subheader("Testes Estatísticos")
-            hipoteses = {
-                "H1: Plano Completo (G3 vs G0)": ("G0 (Controle)", "G3 (Mentoria/Quem Foi)"),
-                "H2a: Informativo vs Controle (G1 vs G0)": ("G0 (Controle)", "G1 (Formal)"),
-                "H2b: Acolhedor vs Controle (G2 vs G0)": ("G0 (Controle)", "G2 (Acolhedor Total)"),
-                "H3: Linguagem (G2 vs G1)": ("G1 (Formal)", "G2 (Acolhedor Total)"),
-                "H4: Poder da Mentoria (G3 vs G4)": ("G4 (Não Convidadas)", "G3 (Mentoria/Quem Foi)"),
-                "H5: Poder do Convite (G5 vs G4)": ("G4 (Não Convidadas)", "G5 (Convidadas)")
-            }
-
+            
             h_sel = st.selectbox("Selecione a Hipótese:", list(hipoteses.keys()), key='h_adesao')
             ref, teste = hipoteses[h_sel]
             
             tabela_res, d_cohen, texto_insight = testar_hipotese(df_plot, 'taxa_adesao_num', ref, teste)
             
-            # Mostra o texto explicativo em destaque
-            st.info(texto_insight)
+            # Exibe o insight (a cor da caixa muda se for marginal na função)
+            if "marginalmente" in texto_insight:
+                st.warning(texto_insight)
+            else:
+                st.info(texto_insight)
             
             col_a, col_b = st.columns([2, 1])
             with col_a:
-                # Mostra a tabela limpa
                 st.dataframe(tabela_res.style.format({
                     'Coef.': '{:.4f}', 'Std.Err.': '{:.4f}', 
-                    't': '{:.2f}', 'P>|t|': '{:.4f}', 
+                    't': '{:.2f}', 
+                    'P>|t|': lambda x: f"{x:.2e}" if x < 0.001 else f"{x:.4f}",
                     '[0.025': '{:.4f}', '0.975]': '{:.4f}'
-                }))
+                }), use_container_width=True)
             with col_b:
                 st.metric("Tamanho do Efeito (Cohen's d)", f"{d_cohen:.3f}" if pd.notna(d_cohen) else "N/A")
 
@@ -366,57 +466,45 @@ if uploaded_file:
         with tab3:
             st.header("Avaliação de Hipóteses Separadas")
             
-            # 1. Seleção do Foco - Alterei a KEY para evitar duplicidade
             tipo_analise = st.radio(
                 "Selecione o Foco da Análise:", 
-                [
-                    "Trabalho Operacional (Apenas Transações)", 
-                    "Retenção Estratégica (Apenas Metas)", 
-                    "Ação Conjunta (Transações + Metas)"
-                ], 
+                ["Trabalho Operacional (Apenas Transações)", "Retenção Estratégica (Apenas Metas)", "Ação Conjunta (Transações + Metas)"], 
                 key="radio_foco_analise"
             )
             
-            # Mapeamento da variável
             if "Apenas Transações" in tipo_analise:
                 var_alvo = 'taxa_transacoes_num'
             elif "Apenas Metas" in tipo_analise:
                 var_alvo = 'taxa_metas_num'
-            elif "Transações + Metas" in tipo_analise:
-                var_alvo = 'taxa_conjunta_num'
             else:
-                # Fallback de segurança (opcional)
-                var_alvo = 'taxa_adesao_num'
+                var_alvo = 'taxa_conjunta_num'
             
-            # 2. Gráfico Boxplot
             fig_sep = px.box(df_plot, x="grupo_comparacao", y=var_alvo, color="grupo_comparacao",
                              color_discrete_map=CORES_GRUPOS, points="all",
                              title=f"Impacto na {tipo_analise}")
             fig_sep.update_layout(yaxis_tickformat='.0%', showlegend=False)
             st.plotly_chart(fig_sep, use_container_width=True)
 
-            # 3. Seleção da Hipótese - Use também uma KEY específica se houver erro aqui
             h_sel_sep = st.selectbox("Selecione a Hipótese para analisar:", list(hipoteses.keys()), key='sel_hipotese_aba3')
             ref_sep, teste_sep = hipoteses[h_sel_sep]
             
-            # 4. Execução do Teste e Insights
             res_tab_sep, d_cohen_sep, texto_insight_sep = testar_hipotese(df_plot, var_alvo, ref_sep, teste_sep)
             
-            # 5. Exibição
-            st.info(texto_insight_sep)
+            if "marginalmente" in texto_insight_sep:
+                st.warning(texto_insight_sep)
+            else:
+                st.info(texto_insight_sep)
             
             col_c, col_d = st.columns([2, 1])
             with col_c:
-                st.subheader("Tabela de Regressão")
                 st.dataframe(res_tab_sep.style.format({
-                    'Coef.': '{:.4f}', 'Std.Err.': '{:.4f}', 
-                    't': '{:.2f}', 'P>|t|': '{:.4f}', 
+                    'Coef.': '{:.4f}', 'Std.Err.': '{:.4f}', 't': '{:.2f}', 
+                    'P>|t|': lambda x: f"{x:.2e}" if x < 0.001 else f"{x:.4f}",
                     '[0.025': '{:.4f}', '0.975]': '{:.4f}'
-                }), use_container_width=True)
+                }), use_container_width=True)   
                 
             with col_d:
-                st.subheader("Efeito Prático")
-                st.metric("Cohen's d", f"{d_cohen_sep:.3f}" if pd.notna(d_cohen_sep) else "N/A")
+                st.metric("Tamanho do Efeito (Cohen's d)", f"{d_cohen_sep:.3f}" if pd.notna(d_cohen_sep) else "N/A")
 
         # --- ABA 4: COMPORTAMENTO AVANÇADO ---
         with tab4:
@@ -546,14 +634,17 @@ if uploaded_file:
             
             tabela_voz, d_voz, texto_voz = testar_hipotese(df_qualidade, alvo_voz, "G1 (Apenas IA Formal)", "G2 (Apenas IA Acolhedora)")
             
-            st.info(texto_voz)
+            if "marginalmente" in texto_voz:
+                st.warning(texto_voz)
+            else:
+                st.info(texto_voz)
             
             col_v1, col_v2 = st.columns([2, 1])
             with col_v1:
                 st.dataframe(tabela_voz.style.format({
-                    'Coef.': '{:.4f}', 'Std.Err.': '{:.4f}', 
-                    't': '{:.2f}', 'P>|t|': '{:.4f}'
-                }))
+                    'Coef.': '{:.4f}', 'Std.Err.': '{:.4f}', 't': '{:.2f}',
+                    'P>|t|': lambda x: f"{x:.2e}" if x < 0.001 else f"{x:.4f}"
+                }), use_container_width=True)
             with col_v2:
                 st.metric("Cohen's d", f"{d_voz:.3f}" if pd.notna(d_voz) else "N/A")
                 
@@ -566,24 +657,25 @@ if uploaded_file:
             flag_voz = st.radio("Analisar Conversão em:", ["fez_transacao", "viu_painel"])
             
             try:
-                # Qui-Quadrado e Cramer's V com Pingouin
                 exp, obs, stats_voz = pg.chi2_independence(df_qualidade, x='grupo_comparacao', y=flag_voz)
+                st.write("**Tabela de Contingência (Observado):**")
                 st.dataframe(obs)
                 
                 pval_voz = stats_voz[stats_voz['test'] == 'pearson']['pval'].values[0]
                 cramer_voz = stats_voz[stats_voz['test'] == 'pearson']['cramer'].values[0]
                 
-                # Odds Ratio com Scipy
                 tabela_2x2 = pd.crosstab(df_qualidade['grupo_comparacao'], df_qualidade[flag_voz])
                 odds, p_fisher = fisher_exact(tabela_2x2)
                 
+                # Formatação científica para o P-Valor do Qui-Quadrado se for muito baixo
+                pval_voz_fmt = f"{pval_voz:.2e}" if pval_voz < 0.001 else f"{pval_voz:.4f}"
+                
                 col_s1, col_s2, col_s3 = st.columns(3)
-                col_s1.metric("P-Valor (Qui-Quadrado)", f"{pval_voz:.4f}")
+                col_s1.metric("P-Valor (Qui-Quadrado)", pval_voz_fmt)
                 col_s2.metric("Cramer's V", f"{cramer_voz:.3f}")
                 col_s3.metric("Odds Ratio", f"{odds:.3f}")
                 
             except Exception as e:
                 st.error(f"Erro ao calcular estatísticas de conversão: {e}")
-
 else:
     st.info("👈 Por favor, faça o upload do arquivo Tabela-mãe (.csv ou .xlsx) no menu lateral para iniciar.")
