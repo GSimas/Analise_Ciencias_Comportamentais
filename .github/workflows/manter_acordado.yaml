@@ -1,0 +1,16 @@
+name: Manter App Acordado
+
+on:
+  schedule:
+    # Roda a cada 6 horas (ajuste conforme preferir)
+    # O formato é: Minutos | Horas | Dia do Mês | Mês | Dia da Semana
+    - cron: '0 */6 * * *'
+  workflow_dispatch: # Permite que você rode manualmente para testar
+
+jobs:
+  ping_app:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enviar Ping HTTP
+        run: |
+          curl -I https://cienciascomportamentais.streamlit.app/
