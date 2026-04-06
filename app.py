@@ -12,6 +12,77 @@ import io
 import urllib.request
 from fpdf import FPDF
 from plotly.subplots import make_subplots
+from wordcloud import WordCloud, STOPWORDS
+import matplotlib.pyplot as plt
+import re
+import random
+from collections import Counter
+from streamlit_echarts import st_echarts
+
+@st.cache_data(show_spinner=False)
+def gerar_nuvem_echarts_pt(texto, fonte="Arial", paleta=None):
+    """Gera o dicionário nativo da nuvem de palavras para o ECharts."""
+    if not texto.strip():
+        return None
+
+    texto = texto.lower()
+    
+    # Stopwords robustas em PT-BR baseadas na nossa limpeza anterior
+    stopwords_pt = set([
+        "o", "a", "os", "as", "um", "uma", "uns", "umas", "de", "do", "da", "dos", "das",
+        "em", "no", "na", "nos", "nas", "para", "por", "com", "sem", "que", "se", "como",
+        "mas", "ou", "e", "é", "não", "nao", "sim", "eu", "me", "meu", "minha", "nós", "nosso",
+        "nossa", "ele", "ela", "eles", "elas", "foi", "ser", "ter", "tem", "tinha", "tudo",
+        "nada", "muito", "pouco", "mais", "menos", "isso", "aquilo", "este", "esta", "esse",
+        "essa", "já", "só", "também", "quando", "onde", "porque", "qual", "quais", "quem", "nan",
+        "pra", "aos", "pelo", "pela", "pois", "sobre", "forma", "ainda", "estou", "tive", "fazer"
+    ])
+
+    # Regex que captura palavras incluindo acentuação (à-ÿ), mínimo de 3 letras
+    palavras_limpas = re.findall(r'\b[a-zà-ÿ]{3,}\b', texto)
+    palavras_filtradas = [w for w in palavras_limpas if w not in stopwords_pt]
+    
+    # Pega as 100 palavras mais comuns
+    contagem = Counter(palavras_filtradas).most_common(100)
+
+    # Se não houver paleta, usa os tons de roxo do projeto
+    if not paleta:
+        paleta = ["#8856A7", "#8C96C6", "#810F7C", "#8C6BB1", "#4D004B"]
+
+    dados_palavras = []
+    for palavra, freq in contagem:
+        dados_palavras.append({
+            "name": palavra.capitalize(),
+            "value": freq,
+            "textStyle": {
+                "color": random.choice(paleta)
+            }
+        })
+
+    # Dicionário que o ECharts entende instantaneamente
+    opcoes_echarts = {
+        "tooltip": {"show": True},
+        "toolbox": {
+            "feature": {
+                "saveAsImage": {"show": True, "title": "Baixar Nuvem", "type": "png"}
+            }
+        },
+        "series": [{
+            "type": "wordCloud",
+            "shape": "circle",
+            "sizeRange": [15, 80],
+            "rotationRange": [-45, 90],
+            "rotationStep": 45,
+            "gridSize": 8,
+            "textStyle": {
+                "fontFamily": fonte,
+                "fontWeight": "bold"
+            },
+            "data": dados_palavras
+        }]
+    }
+
+    return opcoes_echarts
 
 # Configuração da Página
 st.set_page_config(page_title="Relatório Ciências Comportamentais", layout="wide")
@@ -1283,5 +1354,151 @@ if df_bruto is not None:
 
             st.divider()
 
+            # --- 4. AVALIAÇÃO FINAL DO PROGRAMA (QUALITATIVA E QUANTITATIVA) ---
+            st.subheader("🗣️ 5. Avaliação Final do Programa (Feedback)")
+            st.markdown("""
+            Esta seção compila o feedback direto das empreendedoras no final da jornada, 
+            mesclando respostas de múltipla escolha com a análise de sentimentos e sugestões dos textos abertos.
+            """)
+
+            perguntas_fechadas = {
+                "Participação no Programa": "voce_participou_das_atividades_do_programa",
+                "O que ajudou a continuar?": "o_que_mais_ajudou_voce_a_continuar_participando_do_programa",
+                "O que dificultou a participação?": "se_voce_deixou_de_participar_ou_interagir_pouco_o_que_dificultou"
+            }
+
+            perguntas_abertas = {
+                "Influência nos Hábitos": "de_que_forma_o_programa_influenciou_seus_habitos_financeiros",
+                "O que mais gostou": "o_que_voce_mais_gostou_no_programa",
+                "O que poderia ser melhor": "o_que_voce_acha_que_poderia_ter_sido_melhor_no_programa",
+                "O que não funcionou": "o_que_na_sua_opiniao_nao_funcionou_muito_bem",
+                "Sugestões para o Futuro": "que_tipo_de_apoio_conteudo_ou_formato_ajudaria_mais_a_melhorar_essa_solucao_para_outras_mulheres_empreendedoras"
+            }
+
+            tab_fechadas, tab_abertas = st.tabs(["📊 Perguntas Fechadas (Múltipla Escolha)", "☁️ Perguntas Abertas (Nuvem de Palavras)"])
+
+            # ==========================================
+            # SUB-ABA A: MÚLTIPLA ESCOLHA
+            # ==========================================
+            with tab_fechadas:
+                col_f1, col_f2, col_f3 = st.columns([2, 1, 1])
+                with col_f1:
+                    pergunta_f_sel = st.selectbox("Selecione a Pergunta:", list(perguntas_fechadas.keys()))
+                with col_f2:
+                    grupos_f = ["Todos os Grupos"] + list(df_plot['grupo_comparacao'].dropna().unique())
+                    grupo_f_sel = st.selectbox("Filtrar por Grupo (Gráfico):", grupos_f)
+                with col_f3:
+                    tipo_grafico_f = st.radio("Formato do Gráfico:", ["Barras", "Pizza"])
+
+                coluna_alvo_f = perguntas_fechadas[pergunta_f_sel]
+
+                # Filtro de dados e remoção de hífens/vazios
+                df_f = df_plot.dropna(subset=[coluna_alvo_f]).copy()
+                df_f = df_f[~df_f[coluna_alvo_f].astype(str).str.strip().isin(['-', '', 'nan', 'NaN'])]
+
+                if grupo_f_sel != "Todos os Grupos":
+                    df_f = df_f[df_f['grupo_comparacao'] == grupo_f_sel]
+
+                if not df_f.empty:
+                    df_counts = df_f[coluna_alvo_f].value_counts().reset_index()
+                    df_counts.columns = ['Resposta', 'Quantidade']
+                    df_counts = df_counts.sort_values(by='Quantidade', ascending=True)
+
+                    if tipo_grafico_f == "Barras":
+                        fig_f = px.bar(
+                            df_counts, x='Quantidade', y='Resposta', orientation='h',
+                            title=f"{pergunta_f_sel} (N={len(df_f)})",
+                            color_discrete_sequence=['#8856A7'], text='Quantidade'
+                        )
+                        fig_f.update_layout(yaxis_title="", xaxis_title="Número de Empreendedoras")
+                        fig_f.update_traces(textposition='outside')
+                    else:
+                        fig_f = px.pie(
+                            df_counts, values='Quantidade', names='Resposta', 
+                            title=f"{pergunta_f_sel} (N={len(df_f)})",
+                            color_discrete_sequence=px.colors.sequential.Purp
+                        )
+                        fig_f.update_traces(textposition='inside', textinfo='percent+label')
+
+                    st.plotly_chart(fig_f, use_container_width=True)
+                else:
+                    st.warning("Não há respostas válidas registradas para esta pergunta no grupo selecionado.")
+
+            # ==========================================
+            # SUB-ABA B: NUVEM DE PALAVRAS INTERATIVA (ECHARTS)
+            # ==========================================
+            with tab_abertas:
+                col_a1, col_a2 = st.columns([2, 1])
+                with col_a1:
+                    pergunta_a_sel = st.selectbox("Selecione a Pergunta Aberta:", list(perguntas_abertas.keys()))
+                with col_a2:
+                    grupos_a = ["Todos os Grupos"] + list(df_plot['grupo_comparacao'].dropna().unique())
+                    grupo_a_sel = st.selectbox("Filtrar por Grupo (Nuvem):", grupos_a)
+                
+                # --- NOVOS SELETORES DE ESTILO ECHART ---
+                st.write("")
+                col_opt1, col_opt2 = st.columns(2)
+                with col_opt1:
+                    estilo_fonte = st.selectbox(
+                        "Estilo da Fonte:", 
+                        ["Arial", "Verdana", "Courier New", "Comic Sans MS", "Impact", "Poppins"], 
+                        key="font_wc"
+                    )
+                with col_opt2:
+                    tema_cor = st.selectbox(
+                        "Paleta de Cores:", 
+                        ["Impacto (Roxos)", "Oceano", "Fogo", "Floresta", "Cyberpunk", "Acadêmico"], 
+                        key="color_wc"
+                    )
+                    
+                paletas = {
+                    "Impacto (Roxos)": ["#8856A7", "#8C96C6", "#810F7C", "#8C6BB1", "#4D004B"],
+                    "Oceano": ["#0077b6", "#00b4d8", "#90e0ef", "#03045e", "#023e8a"],
+                    "Fogo": ["#ff4d00", "#ff8c00", "#ff0000", "#fad02c", "#e85d04"],
+                    "Floresta": ["#2d6a4f", "#40916c", "#1b4332", "#74c69d", "#95d5b2"],
+                    "Cyberpunk": ["#f72585", "#7209b7", "#3a0ca3", "#4361ee", "#4cc9f0"],
+                    "Acadêmico": ["#264653", "#2a9d8f", "#e9c46a", "#f4a261", "#e76f51"]
+                }
+                paleta_escolhida = paletas[tema_cor]
+
+                st.divider()
+
+                # Extração e Filtro de Dados
+                coluna_alvo_a = perguntas_abertas[pergunta_a_sel]
+                df_a = df_plot.dropna(subset=[coluna_alvo_a]).copy()
+                df_a = df_a[~df_a[coluna_alvo_a].astype(str).str.strip().isin(['-', '', 'nan', 'NaN'])]
+
+                if grupo_a_sel != "Todos os Grupos":
+                    df_a = df_a[df_a['grupo_comparacao'] == grupo_a_sel]
+
+                if not df_a.empty:
+                    texto_completo = " ".join(df_a[coluna_alvo_a].astype(str).tolist())
+                    
+                    st.markdown(f"**Tema:** {pergunta_a_sel} | **Grupo:** {grupo_a_sel} | **Respostas válidas:** {len(df_a)}")
+                    
+                    with st.spinner("Desenhando a nuvem..."):
+                        # Chama a função que criamos no topo do arquivo
+                        wc_opcoes = gerar_nuvem_echarts_pt(
+                            texto_completo, 
+                            fonte=estilo_fonte, 
+                            paleta=paleta_escolhida
+                        )
+                        
+                        if wc_opcoes:
+                            # Renderiza o componente interativo
+                            st_echarts(
+                                options=wc_opcoes, 
+                                height="550px", 
+                                key=f"wc_final_{pergunta_a_sel}_{grupo_a_sel}_{estilo_fonte}_{tema_cor}"
+                            )
+                        else:
+                            st.warning("Não há palavras relevantes suficientes para gerar a nuvem após a filtragem.")
+
+                    with st.expander("📝 Ver amostra de respostas originais na íntegra"):
+                        amostra = df_a[coluna_alvo_a].sample(min(5, len(df_a))).tolist()
+                        for idx, resp in enumerate(amostra):
+                            st.write(f"*{idx+1}. \"{resp}\"*")
+                else:
+                    st.warning("Sem dados textuais válidos para gerar a nuvem neste grupo.")
 else:
     st.warning("Aguardando conexão com a base de dados do Google Drive...")
