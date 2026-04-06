@@ -1355,7 +1355,7 @@ if df_bruto is not None:
             st.divider()
 
             # --- 4. AVALIAÇÃO FINAL DO PROGRAMA (QUALITATIVA E QUANTITATIVA) ---
-            st.subheader("🗣️ 5. Avaliação Final do Programa (Feedback)")
+            st.subheader("🗣️ 4. Avaliação Final do Programa (Feedback)")
             st.markdown("""
             Esta seção compila o feedback direto das empreendedoras no final da jornada, 
             mesclando respostas de múltipla escolha com a análise de sentimentos e sugestões dos textos abertos.
@@ -1435,7 +1435,7 @@ if df_bruto is not None:
                     grupos_a = ["Todos os Grupos"] + list(df_plot['grupo_comparacao'].dropna().unique())
                     grupo_a_sel = st.selectbox("Filtrar por Grupo (Nuvem):", grupos_a)
                 
-                # --- NOVOS SELETORES DE ESTILO ECHART ---
+                # --- SELETORES DE ESTILO ECHART ---
                 st.write("")
                 col_opt1, col_opt2 = st.columns(2)
                 with col_opt1:
@@ -1500,5 +1500,156 @@ if df_bruto is not None:
                             st.write(f"*{idx+1}. \"{resp}\"*")
                 else:
                     st.warning("Sem dados textuais válidos para gerar a nuvem neste grupo.")
+
+            # --- 5. AVALIAÇÃO ESPECÍFICA DA MENTORIA E PERTENCIMENTO ---
+            st.divider()
+            st.subheader("🤝 5. Avaliação da Mentoria")
+            st.markdown("""
+            Análise aprofundada sobre o impacto dos encontros presenciais, o sentimento de rede de apoio 
+            e as barreiras enfrentadas pelas empreendedoras.
+            """)
+
+            perguntas_mentoria_fechadas = {
+                "Recebeu convite presencial?": "voce_recebeu_convite_para_a_mentoria_presencial",
+                "O que mais te marcou na mentoria?": "o_que_mais_te_marcou_na_mentoria",
+                "Sentiu-se apoiada ao conversar com outras?": "conversar_ou_poder_conversar_com_outras_empreendedoras_te_fez_sentir_apoiada_e_que_nao_esta_sozinha",
+                "Faz diferença encontrar mulheres da mesma realidade? (1)": "pra_voce_faz_diferenca_ter_encontro_com_mulheres_que_vivem_uma_realidade_parecida_com_a_sua_ex_morar_na_periferia_ter_correria_de_trabalho_familia",
+                "Qual formato de apoio prefere? (1)": "qual_formato_de_apoio_voce_prefere_como_apoio_para_planejamento_financeiro",
+                "Passou a usar mais o assistente após mentoria?": "depois_da_mentoria_ou_convite_voce_passou_a_usar_mais_o_assistente_pra_registrar_entradassaidas",
+                "Se não foi à mentoria, o que atrapalhou?": "se_nao_foi_o_que_mais_atrapalhou",
+                "Faz diferença encontrar mulheres da mesma realidade? (2)": "pra_voce_faz_diferenca_ter_encontro_com_mulheres_que_vivem_uma_realidade_parecida_com_a_sua_ex_morar_na_periferia_ter_correria_de_trabalho_familia1",
+                "Qual formato de apoio prefere? (2)": "qual_formato_de_apoio_voce_prefere_como_apoio_para_planejamento_financeiro1",
+                "Passou a usar mais o assistente mesmo sem ir?": "depois_do_convite_mesmo_sem_ir_voce_passou_a_usar_mais_o_assistente_pra_registrar_entradassaidas"
+            }
+
+            pergunta_mentoria_aberta = "sugestao_aberta_o_que_faria_uma_mentoria_perfeita_pra_voce"
+
+            tab_mentoria_f, tab_mentoria_a = st.tabs(["📊 Experiência e Atritos (Múltipla Escolha)", "☁️ A Mentoria Perfeita (Nuvem de Palavras)"])
+
+            # ==========================================
+            # SUB-ABA A: MÚLTIPLA ESCOLHA (MENTORIA)
+            # ==========================================
+            with tab_mentoria_f:
+                col_m1, col_m2, col_m3 = st.columns([2, 1, 1])
+                with col_m1:
+                    pergunta_m_sel = st.selectbox("Selecione a Pergunta sobre Mentoria:", list(perguntas_mentoria_fechadas.keys()))
+                with col_m2:
+                    grupos_m = ["Todos os Grupos"] + list(df_plot['grupo_comparacao'].dropna().unique())
+                    grupo_m_sel = st.selectbox("Filtrar por Grupo:", grupos_m, key="grupo_mentoria_f")
+                with col_m3:
+                    tipo_grafico_m = st.radio("Formato do Gráfico:", ["Barras", "Pizza"], key="grafico_mentoria_f")
+
+                coluna_alvo_m = perguntas_mentoria_fechadas[pergunta_m_sel]
+
+                # Filtro de dados e remoção de hífens/vazios
+                df_m = df_plot.dropna(subset=[coluna_alvo_m]).copy()
+                df_m = df_m[~df_m[coluna_alvo_m].astype(str).str.strip().isin(['-', '', 'nan', 'NaN'])]
+
+                if grupo_m_sel != "Todos os Grupos":
+                    df_m = df_m[df_m['grupo_comparacao'] == grupo_m_sel]
+
+                if not df_m.empty:
+                    df_counts_m = df_m[coluna_alvo_m].value_counts().reset_index()
+                    df_counts_m.columns = ['Resposta', 'Quantidade']
+                    
+                    # Ordena do maior para o menor
+                    df_counts_m = df_counts_m.sort_values(by='Quantidade', ascending=True)
+
+                    if tipo_grafico_m == "Barras":
+                        fig_m = px.bar(
+                            df_counts_m, 
+                            x='Quantidade', 
+                            y='Resposta', 
+                            orientation='h',
+                            title=f"{pergunta_m_sel} (N={len(df_m)})",
+                            color_discrete_sequence=['#8856A7'],
+                            text='Quantidade'
+                        )
+                        fig_m.update_layout(yaxis_title="", xaxis_title="Número de Empreendedoras")
+                        fig_m.update_traces(textposition='outside')
+                    else:
+                        fig_m = px.pie(
+                            df_counts_m, 
+                            values='Quantidade', 
+                            names='Resposta', 
+                            title=f"{pergunta_m_sel} (N={len(df_m)})",
+                            color_discrete_sequence=px.colors.sequential.Purp
+                        )
+                        fig_m.update_traces(textposition='inside', textinfo='percent+label')
+
+                    st.plotly_chart(fig_m, use_container_width=True)
+                else:
+                    st.warning("Não há respostas válidas registradas para esta pergunta no grupo selecionado.")
+
+            # ==========================================
+            # SUB-ABA B: NUVEM DE PALAVRAS
+            # ==========================================
+            with tab_mentoria_a:
+                st.markdown("**Pergunta Analisada:** O que faria uma mentoria perfeita pra você?")
+                
+                col_ma1, col_ma2, col_ma3 = st.columns([1, 1, 1])
+                with col_ma1:
+                    grupo_ma_sel = st.selectbox("Filtrar por Grupo:", grupos_m, key="grupo_mentoria_a")
+                with col_ma2:
+                    estilo_fonte_ma = st.selectbox(
+                        "Estilo da Fonte:", 
+                        ["Arial", "Verdana", "Courier New", "Comic Sans MS", "Impact", "Poppins"], 
+                        key="font_wc_mentoria"
+                    )
+                with col_ma3:
+                    tema_cor_ma = st.selectbox(
+                        "Paleta de Cores:", 
+                        ["Impacto (Roxos)", "Oceano", "Fogo", "Floresta", "Cyberpunk", "Acadêmico"], 
+                        key="color_wc_mentoria"
+                    )
+                    
+                paletas_ma = {
+                    "Impacto (Roxos)": ["#8856A7", "#8C96C6", "#810F7C", "#8C6BB1", "#4D004B"],
+                    "Oceano": ["#0077b6", "#00b4d8", "#90e0ef", "#03045e", "#023e8a"],
+                    "Fogo": ["#ff4d00", "#ff8c00", "#ff0000", "#fad02c", "#e85d04"],
+                    "Floresta": ["#2d6a4f", "#40916c", "#1b4332", "#74c69d", "#95d5b2"],
+                    "Cyberpunk": ["#f72585", "#7209b7", "#3a0ca3", "#4361ee", "#4cc9f0"],
+                    "Acadêmico": ["#264653", "#2a9d8f", "#e9c46a", "#f4a261", "#e76f51"]
+                }
+                paleta_escolhida_ma = paletas_ma[tema_cor_ma]
+
+                st.divider()
+
+                # Filtro de dados
+                df_ma = df_plot.dropna(subset=[pergunta_mentoria_aberta]).copy()
+                df_ma = df_ma[~df_ma[pergunta_mentoria_aberta].astype(str).str.strip().isin(['-', '', 'nan', 'NaN'])]
+
+                if grupo_ma_sel != "Todos os Grupos":
+                    df_ma = df_ma[df_ma['grupo_comparacao'] == grupo_ma_sel]
+
+                if not df_ma.empty:
+                    texto_completo_ma = " ".join(df_ma[pergunta_mentoria_aberta].astype(str).tolist())
+                    
+                    st.markdown(f"**Grupo:** {grupo_ma_sel} | **Respostas válidas:** {len(df_ma)}")
+                    
+                    with st.spinner("Projetando a mentoria dos sonhos..."):
+                        # Reutiliza a função ECharts declarada no topo do app.py
+                        wc_opcoes_ma = gerar_nuvem_echarts_pt(
+                            texto_completo_ma, 
+                            fonte=estilo_fonte_ma, 
+                            paleta=paleta_escolhida_ma
+                        )
+                        
+                        if wc_opcoes_ma:
+                            st_echarts(
+                                options=wc_opcoes_ma, 
+                                height="550px", 
+                                key=f"wc_mentoria_{grupo_ma_sel}_{estilo_fonte_ma}_{tema_cor_ma}"
+                            )
+                        else:
+                            st.warning("Não há texto suficiente nesta coluna para gerar a nuvem.")
+
+                    with st.expander("📝 Ler algumas sugestões originais na íntegra"):
+                        amostra_ma = df_ma[pergunta_mentoria_aberta].sample(min(5, len(df_ma))).tolist()
+                        for idx, resp in enumerate(amostra_ma):
+                            st.write(f"*{idx+1}. \"{resp}\"*")
+                else:
+                    st.warning("Sem sugestões textuais válidas para gerar a nuvem neste grupo.")
+
 else:
     st.warning("Aguardando conexão com a base de dados do Google Drive...")
