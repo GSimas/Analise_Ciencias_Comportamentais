@@ -1230,22 +1230,53 @@ if df_bruto is not None:
             if not df_sankey.empty:
                 fluxo = df_sankey.groupby([col_txt_ini, col_txt_fin]).size().reset_index(name='contagem')
 
+                # 1. Define os nós originais
                 nos_iniciais = [str(x) + " (Pré)" for x in fluxo[col_txt_ini].unique()]
                 nos_finais = [str(x) + " (Pós)" for x in fluxo[col_txt_fin].unique()]
                 todos_os_nos = nos_iniciais + nos_finais
 
+                # 2. Aplica o estilo CSS (texto branco com contorno preto e negrito)
+                labels_formatados = [
+                    f"<span style='color:white; text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000; font-weight: bold;'>{label}</span>"
+                    for label in todos_os_nos
+                ]
+
+                # 3. O mapeamento usa os nomes originais para não quebrar a lógica de ligações numéricas
                 mapa_nos = {nome: i for i, nome in enumerate(todos_os_nos)}
 
                 fontes = [mapa_nos[str(x) + " (Pré)"] for x in fluxo[col_txt_ini]]
                 alvos = [mapa_nos[str(x) + " (Pós)"] for x in fluxo[col_txt_fin]]
                 valores = fluxo['contagem'].tolist()
 
+                # 4. Constrói a figura passando os labels formatados diretamente
                 fig_sankey = go.Figure(data=[go.Sankey(
-                    node = dict(pad = 20, thickness = 20, line = dict(color = "black", width = 0.5), label = todos_os_nos, color = "#377EB8"),
-                    link = dict(source = fontes, target = alvos, value = valores, color = "rgba(169, 169, 169, 0.4)")
+                    node = dict(
+                        pad = 20, 
+                        thickness = 20, 
+                        line = dict(color = "black", width = 0.5), 
+                        label = labels_formatados, # Rótulos bonitos aplicados aqui!
+                        color = "#377EB8"
+                    ),
+                    link = dict(
+                        source = fontes, 
+                        target = alvos, 
+                        value = valores, 
+                        color = "rgba(169, 169, 169, 0.4)" # Mantém a transparência para não brigar com o texto
+                    )
                 )])
 
-                fig_sankey.update_layout(title_text=f"Fluxo de Respostas: {q_selecionada} (N={len(df_sankey)})", font_size=12, height=500)
+                # 5. Ajusta o tamanho da fonte global do gráfico e o layout
+                fig_sankey.update_traces(
+                    textfont=dict(size=14, family='Arial, Helvetica, sans-serif'),
+                    selector=dict(type='sankey')
+                )
+
+                fig_sankey.update_layout(
+                    title_text=f"Fluxo de Respostas: {q_selecionada} (N={len(df_sankey)})", 
+                    font_size=12, 
+                    height=500
+                )
+                
                 st.plotly_chart(fig_sankey, use_container_width=True)
             else:
                 st.warning("Não há respostas válidas pareadas para esta questão no grupo selecionado.")
