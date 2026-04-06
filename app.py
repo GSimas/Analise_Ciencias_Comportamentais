@@ -1174,9 +1174,13 @@ if df_bruto is not None:
 
             st.divider()
 
-            # --- 2. BOXPLOT DINÂMICO (TODOS OS PONTOS) ---
-            st.subheader("📦 2. Dispersão das Respostas (Boxplot)")
+            # --- 2. DISPERSÃO E RADAR (BOXPLOT E RADAR) ---
+            st.subheader("📦 2. Dispersão e Radar")
             
+            # --- A. BOXPLOT ---
+            st.markdown("#### Dispersão das Respostas (Boxplot)")
+            
+            # Prepara um DataFrame longo (melt) com todas as métricas para facilitar o filtro
             df_melt_all = df_plot.melt(
                 id_vars=['grupo_comparacao'], 
                 value_vars=cols_validas,
@@ -1193,82 +1197,138 @@ if df_bruto is not None:
                 
             df_melt_all['metrica'] = df_melt_all['coluna_original'].apply(limpar_nome_metrica)
 
-            tipo_eixo_x = st.radio("Como você deseja agrupar o Eixo X?", 
-                                   ["Por Grupos Experimentais", "Por Questões do Questionário"], horizontal=True)
+            tipo_eixo_x = st.radio("Como você deseja agrupar o Boxplot?", 
+                                   ["Por Grupos Experimentais", "Por Questões do Questionário"], horizontal=True, key="box_tipo")
 
             if tipo_eixo_x == "Por Grupos Experimentais":
                 metricas_disponiveis = list(df_melt_all['metrica'].unique())
-                metrica_sel = st.selectbox("Selecione a Métrica para analisar:", metricas_disponiveis)
+                metrica_sel = st.selectbox("Selecione a Métrica para analisar:", metricas_disponiveis, key="box_met")
                 
                 df_box = df_melt_all[df_melt_all['metrica'] == metrica_sel]
                 
                 fig_box = px.box(
-                    df_box, 
-                    x="grupo_comparacao", 
-                    y="valor", 
-                    color="momento",
+                    df_box, x="grupo_comparacao", y="valor", color="momento",
                     color_discrete_map={"Pré-Intervenção": "#B3CDE3", "Pós-Intervenção": "#8856A7"},
-                    points="all", 
-                    title=f"Dispersão: {metrica_sel} (Por Grupo)",
+                    points="all", title=f"Dispersão: {metrica_sel} (Por Grupo)",
                     category_orders={"momento": ["Pré-Intervenção", "Pós-Intervenção"]}
                 )
                 fig_box.update_layout(yaxis_title="Valor / Nota", xaxis_title="")
                 fig_box.update_traces(marker=dict(size=4, opacity=0.6, line=dict(width=0)))
+                st.plotly_chart(fig_box, use_container_width=True)
                 
             else: # Por Questões (Eixo Y Duplo)
                 grupos_disp = ["Todos os Grupos"] + list(df_melt_all['grupo_comparacao'].dropna().unique())
-                grupo_sel = st.selectbox("Selecione o Grupo para analisar:", grupos_disp)
+                grupo_sel = st.selectbox("Selecione o Grupo para analisar:", grupos_disp, key="box_grp")
                 
                 df_box = df_melt_all if grupo_sel == "Todos os Grupos" else df_melt_all[df_melt_all['grupo_comparacao'] == grupo_sel]
                 
-                # Inicia a figura com eixo Y secundário habilitado
                 fig_box = make_subplots(specs=[[{"secondary_y": True}]])
-                
                 df_nota = df_box[df_box['metrica'] == 'Nota Geral']
                 df_q = df_box[df_box['metrica'] != 'Nota Geral']
-                
                 cores = {"Pré-Intervenção": "#B3CDE3", "Pós-Intervenção": "#8856A7"}
 
-                # Traços 1: Questões normais (Q1 a Q13) -> Eixo Esquerdo
                 for momento in ["Pré-Intervenção", "Pós-Intervenção"]:
                     df_q_m = df_q[df_q['momento'] == momento]
                     if not df_q_m.empty:
-                        fig_box.add_trace(
-                            go.Box(
-                                x=df_q_m['metrica'], y=df_q_m['valor'], name=momento,
-                                marker_color=cores[momento], boxpoints='all', jitter=0.4, pointpos=-1.8,
-                                marker=dict(size=4, opacity=0.6, line=dict(width=0)), legendgroup=momento
-                            ),
-                            secondary_y=False,
-                        )
+                        fig_box.add_trace(go.Box(
+                            x=df_q_m['metrica'], y=df_q_m['valor'], name=momento,
+                            marker_color=cores[momento], boxpoints='all', jitter=0.4, pointpos=-1.8,
+                            marker=dict(size=4, opacity=0.6, line=dict(width=0)), legendgroup=momento
+                        ), secondary_y=False)
 
-                # Traços 2: Nota Geral -> Eixo Direito
                 for momento in ["Pré-Intervenção", "Pós-Intervenção"]:
                     df_n_m = df_nota[df_nota['momento'] == momento]
                     if not df_n_m.empty:
-                        fig_box.add_trace(
-                            go.Box(
-                                x=df_n_m['metrica'], y=df_n_m['valor'], name=momento,
-                                marker_color=cores[momento], boxpoints='all', jitter=0.4, pointpos=-1.8,
-                                marker=dict(size=4, opacity=0.6, line=dict(width=0)), legendgroup=momento, 
-                                showlegend=False # Esconde para não duplicar a legenda
-                            ),
-                            secondary_y=True,
-                        )
+                        fig_box.add_trace(go.Box(
+                            x=df_n_m['metrica'], y=df_n_m['valor'], name=momento,
+                            marker_color=cores[momento], boxpoints='all', jitter=0.4, pointpos=-1.8,
+                            marker=dict(size=4, opacity=0.6, line=dict(width=0)), legendgroup=momento, 
+                            showlegend=False
+                        ), secondary_y=True)
 
-                # Ajustes de layout para suportar os eixos e ordenar o Eixo X
                 ordem_x = ['Nota Geral'] + [f'Q{i}' for i in range(1, 14)]
-                fig_box.update_layout(
-                    boxmode='group', 
-                    title=f"Dispersão de Todas as Questões ({grupo_sel})",
-                    xaxis=dict(categoryorder='array', categoryarray=ordem_x)
-                )
-                
-                # Configura os títulos dos eixos
+                fig_box.update_layout(boxmode='group', title=f"Dispersão de Todas as Questões ({grupo_sel})", xaxis=dict(categoryorder='array', categoryarray=ordem_x))
                 fig_box.update_yaxes(title_text="Valores (Q1 a Q13)", secondary_y=False)
                 fig_box.update_yaxes(title_text="Nota Geral", secondary_y=True, showgrid=False)
+                st.plotly_chart(fig_box, use_container_width=True)
 
-            st.plotly_chart(fig_box, use_container_width=True)
+            # --- B. GRÁFICO DE RADAR ---
+            st.markdown("#### 🕸️ Mapa de Autoconfiança (Gráfico de Radar)")
+            st.info("""
+            **Como ler:** Este gráfico plota a média das questões numéricas simultaneamente. 
+            Visualize como um "território" de competências: a expansão da área roxa sobre a azul 
+            indica o impacto sistêmico da intervenção nos hábitos financeiros.
+            """)
+            
+            # Reutiliza a lista de grupos para o filtro do Radar
+            grupos_disp_radar = ["Todos os Grupos"] + list(df_plot['grupo_comparacao'].dropna().unique())
+            grupo_radar_sel = st.selectbox("Selecione o Grupo para o Radar:", grupos_disp_radar, key="radar_grp")
+            
+            # Filtra os dados
+            df_radar = df_plot if grupo_radar_sel == "Todos os Grupos" else df_plot[df_plot['grupo_comparacao'] == grupo_radar_sel]
+            
+            # Define as colunas que alimentam o radar (IGNORANDO A Q11)
+            qs_ini = [f"q{i}_inicial" for i in range(1, 14) if i != 11]
+            qs_fin = [f"q{i}_final" for i in range(1, 14) if i != 11]
+            
+            # Pega apenas as colunas que realmente existem no df
+            val_ini_cols = [c for c in qs_ini if c in df_radar.columns]
+            val_fin_cols = [c for c in qs_fin if c in df_radar.columns]
+            
+            if val_ini_cols and val_fin_cols:
+                # Calcula a média (ignorando nulos)
+                medias_ini = df_radar[val_ini_cols].mean().tolist()
+                medias_fin = df_radar[val_fin_cols].mean().tolist()
+                
+                # Monta os rótulos (Q1, Q2, Q3...)
+                labels_radar = [c.split('_')[0].upper() for c in val_ini_cols]
+                
+                # O Pulo do Gato do Radar: Precisamos duplicar o primeiro valor no final da lista 
+                # para que o Plotly "feche" o círculo (conhecido como "fechar o polígono").
+                medias_ini += [medias_ini[0]]
+                medias_fin += [medias_fin[0]]
+                labels_radar += [labels_radar[0]]
+                
+                # Encontra o valor máximo para travar a escala geométrica do gráfico
+                max_radar_val = max(max(medias_ini, default=0), max(medias_fin, default=0))
+                
+                fig_radar = go.Figure()
+                
+                # Traço Inicial (Pré)
+                fig_radar.add_trace(go.Scatterpolar(
+                    r=medias_ini,
+                    theta=labels_radar,
+                    fill='toself',
+                    name='Pré-Intervenção',
+                    line_color='#B3CDE3',
+                    fillcolor='rgba(179, 205, 227, 0.4)' # Leve transparência
+                ))
+                
+                # Traço Final (Pós)
+                fig_radar.add_trace(go.Scatterpolar(
+                    r=medias_fin,
+                    theta=labels_radar,
+                    fill='toself',
+                    name='Pós-Intervenção',
+                    line_color='#8856A7',
+                    fillcolor='rgba(136, 86, 167, 0.4)'
+                ))
+                
+                fig_radar.update_layout(
+                    polar=dict(
+                        radialaxis=dict(
+                            visible=True,
+                            range=[0, max_radar_val * 1.1] # Dá uma margem de segurança de 10%
+                        )
+                    ),
+                    showlegend=True,
+                    title=f"Expansão das competências ({grupo_radar_sel})"
+                )
+                
+                st.plotly_chart(fig_radar, use_container_width=True)
+            else:
+                st.warning("Colunas de questões numéricas não encontradas para gerar o Radar.")
+
             st.divider()
 
             # --- 3. FLUXO DE MUDANÇA (SANKEY DIAGRAM) ---
