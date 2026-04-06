@@ -11,6 +11,7 @@ import ssl
 import io
 import urllib.request
 from fpdf import FPDF
+from plotly.subplots import make_subplots
 
 # Configuração da Página
 st.set_page_config(page_title="Relatório Ciências Comportamentais", layout="wide")
@@ -355,13 +356,14 @@ if df_bruto is not None:
                 st.rerun()
 
         # --- NAVEGAÇÃO POR ABAS ATUALIZADA ---
-        tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        tab0, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
             "0. Descritivas dos Grupos",
             "1. Checagem de Balanceamento", 
-            "2. Hipóteses (Adesão Geral)", 
-            "3. Hipóteses (Transações vs Metas)", 
+            "2. Hipóteses (Adesão)", 
+            "3. Hipóteses (Transações/Metas)", 
             "4. Comportamento Avançado", 
-            "5. Deep Dive: Tom de Voz (G1 vs G2)"
+            "5. Deep Dive (Tom de Voz)",
+            "6. Questionários (Pré/Pós)" # <-- Nova Aba
         ])
 
         # --- ABA 0: ESTATÍSTICA DESCRITIVA ---
@@ -929,5 +931,326 @@ if df_bruto is not None:
                 
             except Exception as e:
                 st.error(f"Erro ao calcular estatísticas de conversão: {e}")
+
+        # --- ABA 6: ANÁLISE DE QUESTIONÁRIOS (PRÉ/PÓS) ---
+        with tab6:
+            st.header("Análise de Questionários: Pré vs Pós-Intervenção")
+            st.markdown("""
+            Esta seção avalia a evolução da percepção, conhecimento e confiança declarada pelas 
+            empreendedoras, cruzando as respostas iniciais e finais.
+            """)
+
+            # ==============================================================================
+            # DICIONÁRIO DE ENUNCIADOS
+            # ==============================================================================
+            dicionario_questoes = {
+                1: "Nos últimos 12 meses, qual frase melhor descreve a comparação entre a renda total e os gastos na sua casa?",
+                2: "O quanto as frases seguintes descrevem você ou sua situação:  [Preocupações com as despesas e compromissos financeiros são motivo de estresse na minha casa]",
+                3: "O quanto as frases seguintes descrevem você ou sua situação:  [Por causa dos compromissos financeiros assumidos, o padrão de vida da minha casa foi bastante reduzido]",
+                4: "O quanto as frases seguintes descrevem você ou sua situação:  [Estou apertada financeiramente]",
+                5: "O quanto as frases seguintes descrevem você ou sua situação:  [Eu sei como me controlar para não gastar muito]",
+                6: "O quanto as frases seguintes descrevem você ou sua situação:  [Eu sei como me obrigar a poupar]",
+                7: "O quanto as frases seguintes descrevem você ou sua situação:  [Eu sei como me obrigar a cumprir minhas metas financeiras]",
+                8: "Durante ou após o programa, você passou a anotar receitas e despesas com mais frequência?",
+                9: "Hoje, com que frequência você registra suas finanças?",
+                10: "Passou a estabelecer metas ou planos financeiros depois do programa?",
+                11: "Como é o seu acompanhamento de metas (resposta aberta)",
+                12: "Passou a separar o dinheiro do negócio do dinheiro pessoal (por exemplo, contas ou PIX diferentes)?",
+                13: "Nível de confiança atual na sua gestão financeira"
+            }
+
+           
+            cols_iniciais = ['nota_inicial_questionario'] + [f"q{i}_inicial" for i in range(1, 14)]
+            cols_finais = ['nota_final_questionario'] + [f"q{i}_final" for i in range(1, 14)]
+            todas_cols_num = cols_iniciais + cols_finais
+            
+            for col in todas_cols_num:
+                if col in df_plot.columns:
+                    if df_plot[col].dtype == 'object':
+                        df_plot[col] = df_plot[col].astype(str).str.replace(',', '.', regex=False)
+                    df_plot[col] = pd.to_numeric(df_plot[col], errors='coerce')
+
+
+            # --- 0. ESTATÍSTICA DESCRITIVA GERAL ---
+            st.subheader("📋 0. Estatísticas Descritivas (Todas as Questões)")
+            
+            # Filtra apenas as colunas que existem no dataframe
+            cols_validas = [c for c in todas_cols_num if c in df_plot.columns]
+            
+            if cols_validas:
+                # Calcula Média, Mediana e Desvio Padrão
+                df_desc = df_plot[cols_validas].agg(['mean', 'median', 'std']).T
+                df_desc.columns = ['Média', 'Mediana', 'Desvio Padrão']
+                df_desc = df_desc.round(2)
+                
+                with st.expander("Ver Tabela Completa de Estatísticas"):
+                    st.dataframe(df_desc, use_container_width=True)
+            else:
+                st.info("Colunas numéricas não encontradas para gerar estatísticas.")
+
+            st.divider()
+
+            # --- 1. LABORATÓRIO DE EVOLUÇÃO (UNIFICADO) ---
+            st.subheader("📊 1. Laboratório de Evolução (Pré vs Pós)")
+            
+            # --- CONTROLES DO LABORATÓRIO ---
+            with st.expander("🛠️ Configurações do Gráfico", expanded=True):
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    eixo_x_tipo = st.radio("Eixo X:", ["Por Grupos", "Por Questões"], key="lab_eixo")
+                    agg_func = st.radio("Métrica Estatística:", ["Média", "Mediana"], key="lab_agg")
+                with c2:
+                    tipo_grafico = st.selectbox("Tipo de Gráfico:", ["Barras Agrupadas", "Linhas com Marcadores"], key="lab_tipo")
+                    
+                    if eixo_x_tipo == "Por Grupos":
+                        opcoes_metrica = {"Nota Geral": "nota"}
+                        for i in range(1, 14): opcoes_metrica[f"Questão {i}"] = f"q{i}"
+                        metrica_id = st.selectbox("Métrica para Analisar:", list(opcoes_metrica.keys()))
+                        metrica_prefixo = opcoes_metrica[metrica_id]
+                    else:
+                        grupos_lista = ["Todos os Grupos"] + list(df_plot['grupo_comparacao'].dropna().unique())
+                        grupo_f_lab = st.selectbox("Filtrar por Grupo:", grupos_lista)
+                with c3:
+                    st.write("**Dica:**")
+                    st.caption("A visão 'Por Grupos' foca em comparar as intervenções. A visão 'Por Questões' foca em entender a jornada de aprendizado em cada tema.")
+
+            # --- PROCESSAMENTO DOS DADOS PARA O GRÁFICO ---
+            if eixo_x_tipo == "Por Grupos":
+                # CORREÇÃO: Tratamento específico para a coluna de Nota vs Questões
+                if metrica_id == "Nota Geral":
+                    col_ini = "nota_inicial_questionario"
+                    col_fin = "nota_final_questionario"
+                else:
+                    col_ini = f"{metrica_prefixo}_inicial"
+                    col_fin = f"{metrica_prefixo}_final"
+                
+                if agg_func == "Média":
+                    df_res_lab = df_plot.groupby('grupo_comparacao')[[col_ini, col_fin]].mean().reset_index()
+                else:
+                    df_res_lab = df_plot.groupby('grupo_comparacao')[[col_ini, col_fin]].median().reset_index()
+                
+                x_data = df_res_lab['grupo_comparacao']
+                y_ini = df_res_lab[col_ini]
+                y_fin = df_res_lab[col_fin]
+                titulo_lab = f"{tipo_grafico} ({agg_func}): {metrica_id} por Grupo"
+            
+            else: # Por Questões
+                df_f_lab = df_plot if grupo_f_lab == "Todos os Grupos" else df_plot[df_plot['grupo_comparacao'] == grupo_f_lab]
+                
+                lista_qs = [f"q{i}" for i in range(1, 14)] + ["nota"]
+                labels_qs = [f"Q{i}" for i in range(1, 14)] + ["Nota Geral"]
+                
+                y_ini, y_fin = [], []
+                for q in lista_qs:
+                    # CORREÇÃO: Tratamento específico também no loop
+                    if q == "nota":
+                        c_i, c_f = "nota_inicial_questionario", "nota_final_questionario"
+                    else:
+                        c_i, c_f = f"{q}_inicial", f"{q}_final"
+                        
+                    if agg_func == "Média":
+                        y_ini.append(df_f_lab[c_i].mean())
+                        y_fin.append(df_f_lab[c_f].mean())
+                    else:
+                        y_ini.append(df_f_lab[c_i].median())
+                        y_fin.append(df_f_lab[c_f].median())
+                
+                x_data = labels_qs
+                titulo_lab = f"{tipo_grafico} ({agg_func}): Jornada de Todas as Questões ({grupo_f_lab})"
+
+            # --- CONSTRUÇÃO DO GRÁFICO ---
+            fig_lab = go.Figure()
+
+            use_secondary = True if (eixo_x_tipo == "Por Questões") else False
+            if use_secondary:
+                fig_lab = make_subplots(specs=[[{"secondary_y": True}]])
+
+            if "Barras" in tipo_grafico:
+                def add_bar_trace(y_vals, name, color):
+                    if use_secondary:
+                        fig_lab.add_trace(go.Bar(x=x_data[:-1], y=y_vals[:-1], name=f"{name} (Questões)", marker_color=color, legendgroup=name), secondary_y=False)
+                        fig_lab.add_trace(go.Bar(x=[x_data[-1]], y=[y_vals[-1]], name=f"{name} (Nota)", marker_color=color, legendgroup=name, showlegend=False), secondary_y=True)
+                    else:
+                        fig_lab.add_trace(go.Bar(x=x_data, y=y_vals, name=name, marker_color=color))
+                
+                add_bar_trace(y_ini, "Pré-Intervenção", "#B3CDE3")
+                add_bar_trace(y_fin, "Pós-Intervenção", "#8856A7")
+                fig_lab.update_layout(barmode='group')
+
+            else: # Linhas
+                def add_line_trace(y_vals, name, color):
+                    if use_secondary:
+                        fig_lab.add_trace(go.Scatter(x=x_data[:-1], y=y_vals[:-1], name=f"{name} (Questões)", mode='lines+markers', line=dict(color=color, width=3), legendgroup=name), secondary_y=False)
+                        fig_lab.add_trace(go.Scatter(x=[x_data[-1]], y=[y_vals[-1]], name=f"{name} (Nota)", mode='markers', marker=dict(color=color, size=12), legendgroup=name, showlegend=False), secondary_y=True)
+                    else:
+                        fig_lab.add_trace(go.Scatter(x=x_data, y=y_vals, name=name, mode='lines+markers', line=dict(color=color, width=3)))
+                
+                add_line_trace(y_ini, "Pré-Intervenção", "#B3CDE3")
+                add_line_trace(y_fin, "Pós-Intervenção", "#8856A7")
+
+            fig_lab.update_layout(title=titulo_lab, hovermode="x unified", height=500)
+            if use_secondary:
+                fig_lab.update_yaxes(title_text="Escala Questões (1-5)", secondary_y=False)
+                fig_lab.update_yaxes(title_text="Escala Nota Geral", secondary_y=True, showgrid=False)
+            else:
+                fig_lab.update_yaxes(title_text=f"Valor ({agg_func})")
+
+            st.plotly_chart(fig_lab, use_container_width=True)
+            
+            if eixo_x_tipo == "Por Grupos" and "Questão" in metrica_id:
+                q_idx = int(metrica_id.split(" ")[1])
+                st.caption(f"**Enunciado Selecionado:** {dicionario_questoes[q_idx]}")
+
+            st.divider()
+
+            # --- 2. BOXPLOT DINÂMICO (TODOS OS PONTOS) ---
+            st.subheader("📦 2. Dispersão das Respostas (Boxplot)")
+            
+            df_melt_all = df_plot.melt(
+                id_vars=['grupo_comparacao'], 
+                value_vars=cols_validas,
+                var_name='coluna_original',
+                value_name='valor'
+            ).dropna(subset=['valor'])
+            
+            df_melt_all['momento'] = np.where(df_melt_all['coluna_original'].str.contains('inicial'), 'Pré-Intervenção', 'Pós-Intervenção')
+            
+            def limpar_nome_metrica(nome):
+                nome = nome.replace('_inicial', '').replace('_final', '')
+                if 'nota' in nome: return 'Nota Geral'
+                return nome.upper()
+                
+            df_melt_all['metrica'] = df_melt_all['coluna_original'].apply(limpar_nome_metrica)
+
+            tipo_eixo_x = st.radio("Como você deseja agrupar o Eixo X?", 
+                                   ["Por Grupos Experimentais", "Por Questões do Questionário"], horizontal=True)
+
+            if tipo_eixo_x == "Por Grupos Experimentais":
+                metricas_disponiveis = list(df_melt_all['metrica'].unique())
+                metrica_sel = st.selectbox("Selecione a Métrica para analisar:", metricas_disponiveis)
+                
+                df_box = df_melt_all[df_melt_all['metrica'] == metrica_sel]
+                
+                fig_box = px.box(
+                    df_box, 
+                    x="grupo_comparacao", 
+                    y="valor", 
+                    color="momento",
+                    color_discrete_map={"Pré-Intervenção": "#B3CDE3", "Pós-Intervenção": "#8856A7"},
+                    points="all", 
+                    title=f"Dispersão: {metrica_sel} (Por Grupo)",
+                    category_orders={"momento": ["Pré-Intervenção", "Pós-Intervenção"]}
+                )
+                fig_box.update_layout(yaxis_title="Valor / Nota", xaxis_title="")
+                fig_box.update_traces(marker=dict(size=4, opacity=0.6, line=dict(width=0)))
+                
+            else: # Por Questões (Eixo Y Duplo)
+                grupos_disp = ["Todos os Grupos"] + list(df_melt_all['grupo_comparacao'].dropna().unique())
+                grupo_sel = st.selectbox("Selecione o Grupo para analisar:", grupos_disp)
+                
+                df_box = df_melt_all if grupo_sel == "Todos os Grupos" else df_melt_all[df_melt_all['grupo_comparacao'] == grupo_sel]
+                
+                # Inicia a figura com eixo Y secundário habilitado
+                fig_box = make_subplots(specs=[[{"secondary_y": True}]])
+                
+                df_nota = df_box[df_box['metrica'] == 'Nota Geral']
+                df_q = df_box[df_box['metrica'] != 'Nota Geral']
+                
+                cores = {"Pré-Intervenção": "#B3CDE3", "Pós-Intervenção": "#8856A7"}
+
+                # Traços 1: Questões normais (Q1 a Q13) -> Eixo Esquerdo
+                for momento in ["Pré-Intervenção", "Pós-Intervenção"]:
+                    df_q_m = df_q[df_q['momento'] == momento]
+                    if not df_q_m.empty:
+                        fig_box.add_trace(
+                            go.Box(
+                                x=df_q_m['metrica'], y=df_q_m['valor'], name=momento,
+                                marker_color=cores[momento], boxpoints='all', jitter=0.4, pointpos=-1.8,
+                                marker=dict(size=4, opacity=0.6, line=dict(width=0)), legendgroup=momento
+                            ),
+                            secondary_y=False,
+                        )
+
+                # Traços 2: Nota Geral -> Eixo Direito
+                for momento in ["Pré-Intervenção", "Pós-Intervenção"]:
+                    df_n_m = df_nota[df_nota['momento'] == momento]
+                    if not df_n_m.empty:
+                        fig_box.add_trace(
+                            go.Box(
+                                x=df_n_m['metrica'], y=df_n_m['valor'], name=momento,
+                                marker_color=cores[momento], boxpoints='all', jitter=0.4, pointpos=-1.8,
+                                marker=dict(size=4, opacity=0.6, line=dict(width=0)), legendgroup=momento, 
+                                showlegend=False # Esconde para não duplicar a legenda
+                            ),
+                            secondary_y=True,
+                        )
+
+                # Ajustes de layout para suportar os eixos e ordenar o Eixo X
+                ordem_x = ['Nota Geral'] + [f'Q{i}' for i in range(1, 14)]
+                fig_box.update_layout(
+                    boxmode='group', 
+                    title=f"Dispersão de Todas as Questões ({grupo_sel})",
+                    xaxis=dict(categoryorder='array', categoryarray=ordem_x)
+                )
+                
+                # Configura os títulos dos eixos
+                fig_box.update_yaxes(title_text="Valores (Q1 a Q13)", secondary_y=False)
+                fig_box.update_yaxes(title_text="Nota Geral", secondary_y=True, showgrid=False)
+
+            st.plotly_chart(fig_box, use_container_width=True)
+            st.divider()
+
+            # --- 3. FLUXO DE MUDANÇA (SANKEY DIAGRAM) ---
+            st.subheader("🌊 3. Jornada da Resposta (Diagrama Sankey)")
+            
+            col_q, col_g = st.columns([2, 1])
+            with col_q:
+                questoes_opcoes = {f"Questão {i}": i for i in range(1, 14)}
+                q_selecionada = st.selectbox("Selecione a Questão Qualitativa:", list(questoes_opcoes.keys()))
+                q_num = questoes_opcoes[q_selecionada]
+            
+            with col_g:
+                grupos_disponiveis = ["Todos os Grupos"] + list(df_plot['grupo_comparacao'].dropna().unique())
+                g_sankey = st.selectbox("Filtrar Fluxo por Grupo:", grupos_disponiveis)
+
+            st.markdown(f"**📝 Enunciado:** *{dicionario_questoes[q_num]}*")
+
+            col_txt_ini = f"q{q_num}_texto_inicial"
+            col_txt_fin = f"q{q_num}_texto_final"
+
+            df_sankey = df_plot.dropna(subset=[col_txt_ini, col_txt_fin]).copy()
+            df_sankey = df_sankey[
+                (~df_sankey[col_txt_ini].astype(str).str.strip().isin(['-', '', 'nan'])) & 
+                (~df_sankey[col_txt_fin].astype(str).str.strip().isin(['-', '', 'nan']))
+            ]
+
+            if g_sankey != "Todos os Grupos":
+                df_sankey = df_sankey[df_sankey['grupo_comparacao'] == g_sankey]
+
+            if not df_sankey.empty:
+                fluxo = df_sankey.groupby([col_txt_ini, col_txt_fin]).size().reset_index(name='contagem')
+
+                nos_iniciais = [str(x) + " (Pré)" for x in fluxo[col_txt_ini].unique()]
+                nos_finais = [str(x) + " (Pós)" for x in fluxo[col_txt_fin].unique()]
+                todos_os_nos = nos_iniciais + nos_finais
+
+                mapa_nos = {nome: i for i, nome in enumerate(todos_os_nos)}
+
+                fontes = [mapa_nos[str(x) + " (Pré)"] for x in fluxo[col_txt_ini]]
+                alvos = [mapa_nos[str(x) + " (Pós)"] for x in fluxo[col_txt_fin]]
+                valores = fluxo['contagem'].tolist()
+
+                fig_sankey = go.Figure(data=[go.Sankey(
+                    node = dict(pad = 20, thickness = 20, line = dict(color = "black", width = 0.5), label = todos_os_nos, color = "#377EB8"),
+                    link = dict(source = fontes, target = alvos, value = valores, color = "rgba(169, 169, 169, 0.4)")
+                )])
+
+                fig_sankey.update_layout(title_text=f"Fluxo de Respostas: {q_selecionada} (N={len(df_sankey)})", font_size=12, height=500)
+                st.plotly_chart(fig_sankey, use_container_width=True)
+            else:
+                st.warning("Não há respostas válidas pareadas para esta questão no grupo selecionado.")
+
+            st.divider()
+
 else:
     st.warning("Aguardando conexão com a base de dados do Google Drive...")
