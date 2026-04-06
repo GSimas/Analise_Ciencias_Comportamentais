@@ -10,3 +10,4 @@ fpdf2
 xlsxwriter
 wordcloud
 matplotlib
+streamlit-echarts
