@@ -1215,7 +1215,17 @@ if df_bruto is not None:
             # Para analisar todos juntos também
             grupos_disponiveis.insert(0, "Geral (Todos os Grupos)")
 
-            for g in grupos_disponiveis:
+            col_g1, col_g2 = st.columns(2)
+            with col_g1:
+                grupo_1 = st.selectbox("Selecione o 1º Grupo para comparar:", grupos_disponiveis, index=0, key="g1_pareado")
+            with col_g2:
+                grupo_2 = st.selectbox("Selecione o 2º Grupo para comparar:", grupos_disponiveis, index=1 if len(grupos_disponiveis) > 1 else 0, key="g2_pareado")
+
+            grupos_selecionados = [grupo_1, grupo_2]
+            # Remove duplicata visual se o usuário escolher o mesmo grupo 2x
+            grupos_selecionados = list(dict.fromkeys(grupos_selecionados))
+
+            for g in grupos_selecionados:
                 # 3. Filtra o grupo e remove quem não tem o par completo usando as chaves seguras (c_ini, c_fin)
                 if g == "Geral (Todos os Grupos)":
                     df_g = df_plot.dropna(subset=[c_ini, c_fin])
@@ -1240,6 +1250,9 @@ if df_bruto is not None:
 
                     p_val_display = f"{p_val:.4e}" if p_val < 0.001 else p_val
                     
+                    # Tamanho do Efeito (Cohen's d)
+                    d_cohen = mean_diff / std_diff if std_diff != 0 else 0
+
                     # Intervalo de Confiança (95%)
                     t_crit = stats.t.ppf(0.975, df=n_pares-1)
                     margin_error = t_crit * (std_diff / np.sqrt(n_pares))
@@ -1252,6 +1265,7 @@ if df_bruto is not None:
                         "Média (Pré)": pre_vals.mean(),
                         "Média (Pós)": pos_vals.mean(),
                         "Efeito (Δ)": mean_diff,
+                        "Cohen's d": d_cohen,
                         "IC 95% Inferior": ci_lower,
                         "IC 95% Superior": ci_upper,
                         "P-Valor": p_val_display
@@ -1275,6 +1289,7 @@ if df_bruto is not None:
                         "Média (Pré)": st.column_config.NumberColumn(format="%.2f"),
                         "Média (Pós)": st.column_config.NumberColumn(format="%.2f"),
                         "Efeito (Δ)": st.column_config.NumberColumn(format="%+.2f"),
+                        "Cohen's d": st.column_config.NumberColumn(format="%+.3f"),
                         "IC 95% Inferior": st.column_config.NumberColumn(format="%.2f"),
                         "IC 95% Superior": st.column_config.NumberColumn(format="%.2f"),
                         "P-Valor": st.column_config.TextColumn("P-Valor")
