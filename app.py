@@ -18,6 +18,7 @@ import re
 import random
 from collections import Counter
 from streamlit_echarts import st_echarts
+import scipy.stats as stats
 
 @st.cache_data(show_spinner=False)
 def gerar_nuvem_echarts_pt(texto, fonte="Arial", paleta=None):
@@ -202,7 +203,7 @@ def check_password():
     
     if st.button("Entrar"):
         # Substitua 'suasenha123' pela senha que desejar
-        if password == "hub_sebrae_2026": 
+        if password == st.secrets["password"]: 
             st.session_state["password_correct"] = True
             st.rerun() # Reinicia para mostrar o app
         else:
@@ -505,7 +506,6 @@ if df_bruto is not None:
             st.plotly_chart(fig_bar_desc, use_container_width=True)
 
         # --- ABA 1: BALANCEAMENTO ---
-        # --- ABA 1: BALANCEAMENTO ---
         with tab1:
             st.header("Checagem de Balanceamento (Qui-Quadrado)")
             
@@ -525,9 +525,9 @@ if df_bruto is not None:
                         st.dataframe(tabela)
                         
                         try:
-                            # Teste Qui-Quadrado usando Pingouin
-                            expected, observed, stats = pg.chi2_independence(df, x='grupo', y=var)
-                            pval = stats[stats['test'] == 'pearson']['pval'].values[0]
+                            # Renomeamos 'stats' para 'res_chi2' para não dar conflito com a biblioteca
+                            expected, observed, res_chi2 = pg.chi2_independence(df, x='grupo', y=var)
+                            pval = res_chi2[res_chi2['test'] == 'pearson']['pval'].values[0]
                             st.info(f"**P-valor:** {pval:.4f} (Se > 0.05, grupos estão balanceados)")
                         except Exception as e:
                             st.warning(f"Não foi possível calcular o qui-quadrado: {e}")
@@ -1041,6 +1041,18 @@ if df_bruto is not None:
                         df_plot[col] = df_plot[col].astype(str).str.replace(',', '.', regex=False)
                     df_plot[col] = pd.to_numeric(df_plot[col], errors='coerce')
 
+            # --- CRIAÇÃO DE NOVAS VARIÁVEIS (ISFB FEBRABAN) ---
+            for sufixo in ['_inicial', '_final']:
+                q_seg = [f'q{i}{sufixo}' for i in range(1, 5)]
+                if all(c in df_plot.columns for c in q_seg):
+                    df_plot[f'seguranca_financeira{sufixo}'] = df_plot[q_seg].sum(axis=1, skipna=False)
+                
+                q_comp = [f'q{i}{sufixo}' for i in range(5, 8)]
+                if all(c in df_plot.columns for c in q_comp):
+                    df_plot[f'comportamento_financeiro{sufixo}'] = df_plot[q_comp].sum(axis=1, skipna=False)
+                
+                todas_cols_num.extend([f'seguranca_financeira{sufixo}', f'comportamento_financeiro{sufixo}'])
+
 
             # --- 0. ESTATÍSTICA DESCRITIVA GERAL ---
             st.subheader("📋 0. Estatísticas Descritivas (Todas as Questões)")
@@ -1076,6 +1088,8 @@ if df_bruto is not None:
                     if eixo_x_tipo == "Por Grupos":
                         opcoes_metrica = {"Nota Geral": "nota"}
                         for i in range(1, 14): opcoes_metrica[f"Questão {i}"] = f"q{i}"
+                        opcoes_metrica["Segurança Financeira (Q1-Q4)"] = "seguranca_financeira"
+                        opcoes_metrica["Comportamento Financeiro (Q5-Q7)"] = "comportamento_financeiro"
                         metrica_id = st.selectbox("Métrica para Analisar:", list(opcoes_metrica.keys()))
                         metrica_prefixo = opcoes_metrica[metrica_id]
                     else:
@@ -1172,6 +1186,103 @@ if df_bruto is not None:
                 q_idx = int(metrica_id.split(" ")[1])
                 st.caption(f"**Enunciado Selecionado:** {dicionario_questoes[q_idx]}")
 
+            # ==========================================
+            # TESTE DE HIPÓTESE PAREADO E INTERVALOS DE CONFIANÇA
+            # ==========================================
+            st.markdown("#### 📐 Análise Estatística Pareada")
+            st.info("""
+            Esta análise considera **apenas a amostra retida** (empreendedoras que responderam tanto o Pré quanto o Pós). 
+            Em vez de focar apenas no p-valor, observe o **Efeito (Diferença Média)** e o **Intervalo de Confiança (IC 95%)** para entender a magnitude real da mudança e a precisão da estimativa.
+            """)
+
+            # 1. Dicionário próprio para garantir que o teste encontre as colunas corretas
+            opcoes_stats = {
+                "Nota Geral": ("nota_inicial_questionario", "nota_final_questionario"),
+                "Segurança Financeira (Q1-Q4)": ("seguranca_financeira_inicial", "seguranca_financeira_final"),
+                "Comportamento Financeiro (Q5-Q7)": ("comportamento_financeiro_inicial", "comportamento_financeiro_final")
+            }
+            for i in range(1, 14):
+                opcoes_stats[f"Questão {i}"] = (f"q{i}_inicial", f"q{i}_final")
+
+            # 2. Seletor independente para o teste
+            metrica_teste = st.selectbox("Selecione a métrica para o Teste Pareado:", list(opcoes_stats.keys()), key="sel_stat_pareado")
+            c_ini, c_fin = opcoes_stats[metrica_teste]
+
+            resultados_stats = []
+            
+            # Pega todos os grupos disponíveis na base
+            grupos_disponiveis = df_plot['grupo_comparacao'].dropna().unique().tolist()
+            # Para analisar todos juntos também
+            grupos_disponiveis.insert(0, "Geral (Todos os Grupos)")
+
+            for g in grupos_disponiveis:
+                # 3. Filtra o grupo e remove quem não tem o par completo usando as chaves seguras (c_ini, c_fin)
+                if g == "Geral (Todos os Grupos)":
+                    df_g = df_plot.dropna(subset=[c_ini, c_fin])
+                else:
+                    df_g = df_plot[df_plot['grupo_comparacao'] == g].dropna(subset=[c_ini, c_fin])
+                
+                n_pares = len(df_g)
+                
+                # Só calcula se houver amostra suficiente para variância (n > 1)
+                if n_pares > 1:
+                    pre_vals = df_g[c_ini]
+                    pos_vals = df_g[c_fin]
+                    
+                    # Cálculos da Diferença
+                    diff = pos_vals - pre_vals
+                    mean_diff = diff.mean()
+                    std_diff = diff.std(ddof=1)
+                    se_diff = std_diff / np.sqrt(n_pares)
+                    
+                    # Teste t pareado
+                    t_stat, p_val = stats.ttest_rel(pos_vals, pre_vals)
+
+                    p_val_display = f"{p_val:.4e}" if p_val < 0.001 else p_val
+                    
+                    # Intervalo de Confiança (95%)
+                    t_crit = stats.t.ppf(0.975, df=n_pares-1)
+                    margin_error = t_crit * (std_diff / np.sqrt(n_pares))
+                    ci_lower = mean_diff - margin_error
+                    ci_upper = mean_diff + margin_error
+                    
+                    resultados_stats.append({
+                        "Grupo": g,
+                        "N (Pares)": n_pares,
+                        "Média (Pré)": pre_vals.mean(),
+                        "Média (Pós)": pos_vals.mean(),
+                        "Efeito (Δ)": mean_diff,
+                        "IC 95% Inferior": ci_lower,
+                        "IC 95% Superior": ci_upper,
+                        "P-Valor": p_val_display
+                    })
+
+            # Exibição da Tabela
+            if resultados_stats:
+                df_stats_pareado = pd.DataFrame(resultados_stats)
+                
+                # Destaca a linha "Geral" para fácil visualização
+                def style_geral(row):
+                    if row['Grupo'] == "Geral (Todos os Grupos)":
+                        return ['background-color: #f0f2f6; font-weight: bold'] * len(row)
+                    return [''] * len(row)
+
+                st.dataframe(
+                    df_stats_pareado.style.apply(style_geral, axis=1),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Média (Pré)": st.column_config.NumberColumn(format="%.2f"),
+                        "Média (Pós)": st.column_config.NumberColumn(format="%.2f"),
+                        "Efeito (Δ)": st.column_config.NumberColumn(format="%+.2f"),
+                        "IC 95% Inferior": st.column_config.NumberColumn(format="%.2f"),
+                        "IC 95% Superior": st.column_config.NumberColumn(format="%.2f"),
+                        "P-Valor": st.column_config.TextColumn("P-Valor")
+                    }
+                )
+            else:
+                st.warning("Não há dados pareados suficientes (Pré e Pós) para calcular a estatística.")
+
             st.divider()
 
             # --- 2. DISPERSÃO E RADAR (BOXPLOT E RADAR) ---
@@ -1193,6 +1304,8 @@ if df_bruto is not None:
             def limpar_nome_metrica(nome):
                 nome = nome.replace('_inicial', '').replace('_final', '')
                 if 'nota' in nome: return 'Nota Geral'
+                if 'seguranca_financeira' in nome: return 'Segurança Financeira'
+                if 'comportamento_financeiro' in nome: return 'Comportamento Financeiro'
                 return nome.upper()
                 
             df_melt_all['metrica'] = df_melt_all['coluna_original'].apply(limpar_nome_metrica)
