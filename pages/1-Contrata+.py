@@ -222,10 +222,25 @@ with tab_geral:
         df_grupos['taxa de leitura'] = (df_grupos['Total de lidas'] / df_grupos['Total envios'] * 100).round(4)
         df_grupos['Taxa de conversão'] = (df_grupos['Total cadastrados'] / df_grupos['Total envios'] * 100).round(4)
         
+        if 'total notificacoes push recebidas' in df_grupos.columns:
+            df_grupos['Taxa Lidas / Push Recebidas'] = df_grupos.apply(
+                lambda row: (row['Total de lidas'] / row['total notificacoes push recebidas'] * 100) if row['total notificacoes push recebidas'] > 0 else 0, 
+                axis=1
+            ).astype(float).round(4)
+            
+        df_grupos['Conversão diagnóstica (Cadastros/Lidas)'] = df_grupos.apply(
+            lambda row: (row['Total cadastrados'] / row['Total de lidas'] * 100) if row['Total de lidas'] > 0 else 0, 
+            axis=1
+        ).astype(float).round(4)
+        
         st.write("**Resumo por Mensagem:**")
         st.dataframe(df_grupos.sort_values('Taxa de conversão', ascending=False), use_container_width=True, hide_index=True,
-                     column_config={"taxa de leitura": st.column_config.NumberColumn(format="%.4f %%"),
-                                    "Taxa de conversão": st.column_config.NumberColumn(format="%.4f %%")})
+                     column_config={
+                         "taxa de leitura": st.column_config.NumberColumn(format="%.4f %%"),
+                         "Taxa de conversão": st.column_config.NumberColumn(format="%.4f %%"),
+                         "Taxa Lidas / Push Recebidas": st.column_config.NumberColumn(format="%.4f %%"),
+                         "Conversão diagnóstica (Cadastros/Lidas)": st.column_config.NumberColumn(format="%.4f %%")
+                     })
         
         st.divider()
         metrica_alvo = st.radio("Métrica para o gráfico:", ["Taxa de conversão", "taxa de leitura"], horizontal=True)
@@ -258,7 +273,8 @@ with tab_geral:
         
     map_cols_cnpjs = {
         'CNPJ': 'CNPJ', 'cpf': 'CPF', 'CNAE_x': 'CNAE', 
-        'data_leitura': 'data de leitura mensagem', 'Data de cadastro': 'data de cadastro',
+        'data_leitura': 'data de leitura mensagem', 'notificacao_push_recebida': 'notificação push recebida',
+        'Data de cadastro': 'data de cadastro',
         'Periodo total da janela de cadastros': 'Periodo total da janela de cadastros'
     }
     
