@@ -1050,8 +1050,19 @@ if df_bruto is not None:
                 q_comp = [f'q{i}{sufixo}' for i in range(5, 8)]
                 if all(c in df_plot.columns for c in q_comp):
                     df_plot[f'comportamento_financeiro{sufixo}'] = df_plot[q_comp].sum(axis=1, skipna=False)
+                    
+                q_hab = [f'q{i}{sufixo}' for i in [8, 9, 10, 12]]
+                if all(c in df_plot.columns for c in q_hab):
+                    df_plot[f'habitos_organizacao{sufixo}'] = df_plot[q_hab].sum(axis=1, skipna=False)
+                    
+                q_conf = f'q13{sufixo}'
+                if q_conf in df_plot.columns:
+                    df_plot[f'confianca{sufixo}'] = df_plot[q_conf]
                 
-                todas_cols_num.extend([f'seguranca_financeira{sufixo}', f'comportamento_financeiro{sufixo}'])
+                todas_cols_num.extend([
+                    f'seguranca_financeira{sufixo}', f'comportamento_financeiro{sufixo}',
+                    f'habitos_organizacao{sufixo}', f'confianca{sufixo}'
+                ])
 
 
             # --- 0. ESTATÍSTICA DESCRITIVA GERAL ---
@@ -1090,8 +1101,9 @@ if df_bruto is not None:
                         for i in range(1, 14): opcoes_metrica[f"Questão {i}"] = f"q{i}"
                         opcoes_metrica["Segurança Financeira (Q1-Q4)"] = "seguranca_financeira"
                         opcoes_metrica["Comportamento Financeiro (Q5-Q7)"] = "comportamento_financeiro"
-                        metrica_id = st.selectbox("Métrica para Analisar:", list(opcoes_metrica.keys()))
-                        metrica_prefixo = opcoes_metrica[metrica_id]
+                        opcoes_metrica["Hábitos/Organização (Q8-Q10, Q12)"] = "habitos_organizacao"
+                        opcoes_metrica["Confiança (Q13)"] = "confianca"
+                        metricas_selecionadas = st.multiselect("Métrica(s) para Analisar (Máx: 4):", list(opcoes_metrica.keys()), default=[list(opcoes_metrica.keys())[0]], max_selections=4)
                     else:
                         grupos_lista = ["Todos os Grupos"] + list(df_plot['grupo_comparacao'].dropna().unique())
                         grupo_f_lab = st.selectbox("Filtrar por Grupo:", grupos_lista)
@@ -1100,24 +1112,46 @@ if df_bruto is not None:
                     st.caption("A visão 'Por Grupos' foca em comparar as intervenções. A visão 'Por Questões' foca em entender a jornada de aprendizado em cada tema.")
 
             # --- PROCESSAMENTO DOS DADOS PARA O GRÁFICO ---
+            # --- CONSTRUÇÃO DO GRÁFICO ---
+            fig_lab = go.Figure()
+
+            use_secondary = True if (eixo_x_tipo == "Por Questões") else False
+            if use_secondary:
+                fig_lab = make_subplots(specs=[[{"secondary_y": True}]])
+            
             if eixo_x_tipo == "Por Grupos":
-                # CORREÇÃO: Tratamento específico para a coluna de Nota vs Questões
-                if metrica_id == "Nota Geral":
-                    col_ini = "nota_inicial_questionario"
-                    col_fin = "nota_final_questionario"
-                else:
-                    col_ini = f"{metrica_prefixo}_inicial"
-                    col_fin = f"{metrica_prefixo}_final"
+                cores_pre = ["#B3CDE3", "#A1D99B", "#FDBF6F", "#CAB2D6"]
+                cores_pos = ["#8856A7", "#31A354", "#FF7F00", "#6A3D9A"]
                 
-                if agg_func == "Média":
-                    df_res_lab = df_plot.groupby('grupo_comparacao')[[col_ini, col_fin]].mean().reset_index()
+                if not metricas_selecionadas:
+                    st.warning("Selecione ao menos uma métrica.")
                 else:
-                    df_res_lab = df_plot.groupby('grupo_comparacao')[[col_ini, col_fin]].median().reset_index()
-                
-                x_data = df_res_lab['grupo_comparacao']
-                y_ini = df_res_lab[col_ini]
-                y_fin = df_res_lab[col_fin]
-                titulo_lab = f"{tipo_grafico} ({agg_func}): {metrica_id} por Grupo"
+                    for idx, met_sel in enumerate(metricas_selecionadas):
+                        prefixo = opcoes_metrica[met_sel]
+                        if met_sel == "Nota Geral":
+                            col_ini, col_fin = "nota_inicial_questionario", "nota_final_questionario"
+                        else:
+                            col_ini, col_fin = f"{prefixo}_inicial", f"{prefixo}_final"
+                            
+                        if agg_func == "Média":
+                            df_res_lab = df_plot.groupby('grupo_comparacao')[[col_ini, col_fin]].mean().reset_index()
+                        else:
+                            df_res_lab = df_plot.groupby('grupo_comparacao')[[col_ini, col_fin]].median().reset_index()
+                            
+                        x_data = df_res_lab['grupo_comparacao']
+                        y_ini = df_res_lab[col_ini]
+                        y_fin = df_res_lab[col_fin]
+                        
+                        if "Barras" in tipo_grafico:
+                            fig_lab.add_trace(go.Bar(x=x_data, y=y_ini, name=f"Pré ({met_sel})", marker_color=cores_pre[idx]))
+                            fig_lab.add_trace(go.Bar(x=x_data, y=y_fin, name=f"Pós ({met_sel})", marker_color=cores_pos[idx]))
+                        else:
+                            fig_lab.add_trace(go.Scatter(x=x_data, y=y_ini, name=f"Pré ({met_sel})", mode='lines+markers', line=dict(color=cores_pre[idx], width=3)))
+                            fig_lab.add_trace(go.Scatter(x=x_data, y=y_fin, name=f"Pós ({met_sel})", mode='lines+markers', line=dict(color=cores_pos[idx], width=3)))
+                        
+                titulo_lab = f"{tipo_grafico} ({agg_func}): Métricas por Grupo"
+                if "Barras" in tipo_grafico:
+                    fig_lab.update_layout(barmode='group')
             
             else: # Por Questões
                 df_f_lab = df_plot if grupo_f_lab == "Todos os Grupos" else df_plot[df_plot['grupo_comparacao'] == grupo_f_lab]
@@ -1127,7 +1161,6 @@ if df_bruto is not None:
                 
                 y_ini, y_fin = [], []
                 for q in lista_qs:
-                    # CORREÇÃO: Tratamento específico também no loop
                     if q == "nota":
                         c_i, c_f = "nota_inicial_questionario", "nota_final_questionario"
                     else:
@@ -1143,35 +1176,28 @@ if df_bruto is not None:
                 x_data = labels_qs
                 titulo_lab = f"{tipo_grafico} ({agg_func}): Jornada de Todas as Questões ({grupo_f_lab})"
 
-            # --- CONSTRUÇÃO DO GRÁFICO ---
-            fig_lab = go.Figure()
+                if "Barras" in tipo_grafico:
+                    def add_bar_trace(y_vals, name, color):
+                        if use_secondary:
+                            fig_lab.add_trace(go.Bar(x=x_data[:-1], y=y_vals[:-1], name=f"{name} (Questões)", marker_color=color, legendgroup=name), secondary_y=False)
+                            fig_lab.add_trace(go.Bar(x=[x_data[-1]], y=[y_vals[-1]], name=f"{name} (Nota)", marker_color=color, legendgroup=name, showlegend=False), secondary_y=True)
+                        else:
+                            fig_lab.add_trace(go.Bar(x=x_data, y=y_vals, name=name, marker_color=color))
+                    
+                    add_bar_trace(y_ini, "Pré-Intervenção", "#B3CDE3")
+                    add_bar_trace(y_fin, "Pós-Intervenção", "#8856A7")
+                    fig_lab.update_layout(barmode='group')
 
-            use_secondary = True if (eixo_x_tipo == "Por Questões") else False
-            if use_secondary:
-                fig_lab = make_subplots(specs=[[{"secondary_y": True}]])
-
-            if "Barras" in tipo_grafico:
-                def add_bar_trace(y_vals, name, color):
-                    if use_secondary:
-                        fig_lab.add_trace(go.Bar(x=x_data[:-1], y=y_vals[:-1], name=f"{name} (Questões)", marker_color=color, legendgroup=name), secondary_y=False)
-                        fig_lab.add_trace(go.Bar(x=[x_data[-1]], y=[y_vals[-1]], name=f"{name} (Nota)", marker_color=color, legendgroup=name, showlegend=False), secondary_y=True)
-                    else:
-                        fig_lab.add_trace(go.Bar(x=x_data, y=y_vals, name=name, marker_color=color))
-                
-                add_bar_trace(y_ini, "Pré-Intervenção", "#B3CDE3")
-                add_bar_trace(y_fin, "Pós-Intervenção", "#8856A7")
-                fig_lab.update_layout(barmode='group')
-
-            else: # Linhas
-                def add_line_trace(y_vals, name, color):
-                    if use_secondary:
-                        fig_lab.add_trace(go.Scatter(x=x_data[:-1], y=y_vals[:-1], name=f"{name} (Questões)", mode='lines+markers', line=dict(color=color, width=3), legendgroup=name), secondary_y=False)
-                        fig_lab.add_trace(go.Scatter(x=[x_data[-1]], y=[y_vals[-1]], name=f"{name} (Nota)", mode='markers', marker=dict(color=color, size=12), legendgroup=name, showlegend=False), secondary_y=True)
-                    else:
-                        fig_lab.add_trace(go.Scatter(x=x_data, y=y_vals, name=name, mode='lines+markers', line=dict(color=color, width=3)))
-                
-                add_line_trace(y_ini, "Pré-Intervenção", "#B3CDE3")
-                add_line_trace(y_fin, "Pós-Intervenção", "#8856A7")
+                else: # Linhas
+                    def add_line_trace(y_vals, name, color):
+                        if use_secondary:
+                            fig_lab.add_trace(go.Scatter(x=x_data[:-1], y=y_vals[:-1], name=f"{name} (Questões)", mode='lines+markers', line=dict(color=color, width=3), legendgroup=name), secondary_y=False)
+                            fig_lab.add_trace(go.Scatter(x=[x_data[-1]], y=[y_vals[-1]], name=f"{name} (Nota)", mode='markers', marker=dict(color=color, size=12), legendgroup=name, showlegend=False), secondary_y=True)
+                        else:
+                            fig_lab.add_trace(go.Scatter(x=x_data, y=y_vals, name=name, mode='lines+markers', line=dict(color=color, width=3)))
+                    
+                    add_line_trace(y_ini, "Pré-Intervenção", "#B3CDE3")
+                    add_line_trace(y_fin, "Pós-Intervenção", "#8856A7")
 
             fig_lab.update_layout(title=titulo_lab, hovermode="x unified", height=500)
             if use_secondary:
@@ -1182,9 +1208,11 @@ if df_bruto is not None:
 
             st.plotly_chart(fig_lab, use_container_width=True)
             
-            if eixo_x_tipo == "Por Grupos" and "Questão" in metrica_id:
-                q_idx = int(metrica_id.split(" ")[1])
-                st.caption(f"**Enunciado Selecionado:** {dicionario_questoes[q_idx]}")
+            if eixo_x_tipo == "Por Grupos":
+                for met_sel in metricas_selecionadas:
+                    if "Questão" in met_sel:
+                        q_idx = int(met_sel.split(" ")[1])
+                        st.caption(f"**{met_sel}:** {dicionario_questoes[q_idx]}")
 
             # ==========================================
             # TESTE DE HIPÓTESE PAREADO E INTERVALOS DE CONFIANÇA
@@ -1199,104 +1227,150 @@ if df_bruto is not None:
             opcoes_stats = {
                 "Nota Geral": ("nota_inicial_questionario", "nota_final_questionario"),
                 "Segurança Financeira (Q1-Q4)": ("seguranca_financeira_inicial", "seguranca_financeira_final"),
-                "Comportamento Financeiro (Q5-Q7)": ("comportamento_financeiro_inicial", "comportamento_financeiro_final")
+                "Comportamento Financeiro (Q5-Q7)": ("comportamento_financeiro_inicial", "comportamento_financeiro_final"),
+                "Hábitos/Organização (Q8-Q10, Q12)": ("habitos_organizacao_inicial", "habitos_organizacao_final"),
+                "Confiança (Q13)": ("confianca_inicial", "confianca_final")
             }
             for i in range(1, 14):
                 opcoes_stats[f"Questão {i}"] = (f"q{i}_inicial", f"q{i}_final")
 
-            # 2. Seletor independente para o teste
-            metrica_teste = st.selectbox("Selecione a métrica para o Teste Pareado:", list(opcoes_stats.keys()), key="sel_stat_pareado")
-            c_ini, c_fin = opcoes_stats[metrica_teste]
-
-            resultados_stats = []
+            # 2. Seletor independente para o teste e Botão de Exportação
+            import itertools
+            import io
             
             # Pega todos os grupos disponíveis na base
             grupos_disponiveis = df_plot['grupo_comparacao'].dropna().unique().tolist()
-            # Para analisar todos juntos também
-            grupos_disponiveis.insert(0, "Geral (Todos os Grupos)")
+            
+            @st.cache_data
+            def gerar_excel_pareado(_df_fonte, _dicionario_opcoes, lista_grupos):
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    combinacoes_todas = list(itertools.combinations(lista_grupos, 2))
+                    for metrica, (col_i, col_f) in _dicionario_opcoes.items():
+                        linhas_metrica = []
+                        for g1, g2 in combinacoes_todas:
+                            for gp in [g1, g2]:
+                                df_gp = _df_fonte[_df_fonte['grupo_comparacao'] == gp].dropna(subset=[col_i, col_f])
+                                n_pares = len(df_gp)
+                                if n_pares > 1:
+                                    pre_vals = df_gp[col_i]
+                                    pos_vals = df_gp[col_f]
+                                    
+                                    diff = pos_vals - pre_vals
+                                    mean_diff = diff.mean()
+                                    std_diff = diff.std(ddof=1)
+                                    
+                                    t_stat, p_val = stats.ttest_rel(pos_vals, pre_vals)
+                                    d_cohen = mean_diff / std_diff if std_diff != 0 else 0
+                                    
+                                    t_crit = stats.t.ppf(0.975, df=n_pares-1)
+                                    margin_error = t_crit * (std_diff / np.sqrt(n_pares))
+                                    
+                                    linhas_metrica.append({
+                                        "Comparação": f"{g1} vs {g2}",
+                                        "Grupo": gp,
+                                        "N (Pares)": n_pares,
+                                        "Média (Pré)": pre_vals.mean(),
+                                        "Média (Pós)": pos_vals.mean(),
+                                        "Efeito (Δ)": mean_diff,
+                                        "Cohen's d": d_cohen,
+                                        "IC 95% Inferior": mean_diff - margin_error,
+                                        "IC 95% Superior": mean_diff + margin_error,
+                                        "P-Valor": p_val
+                                    })
+                        if linhas_metrica:
+                            df_out = pd.DataFrame(linhas_metrica)
+                            # Trata caracteres não aceitos pelo Excel e limita a 31 caracteres
+                            sheet_name = metrica.replace('/', '-').replace('?', '').replace('*', '').replace(':', '')[:31]
+                            df_out.to_excel(writer, sheet_name=sheet_name, index=False)
+                return output.getvalue()
 
-            col_g1, col_g2 = st.columns(2)
-            with col_g1:
-                grupo_1 = st.selectbox("Selecione o 1º Grupo para comparar:", grupos_disponiveis, index=0, key="g1_pareado")
-            with col_g2:
-                grupo_2 = st.selectbox("Selecione o 2º Grupo para comparar:", grupos_disponiveis, index=1 if len(grupos_disponiveis) > 1 else 0, key="g2_pareado")
-
-            grupos_selecionados = [grupo_1, grupo_2]
-            # Remove duplicata visual se o usuário escolher o mesmo grupo 2x
-            grupos_selecionados = list(dict.fromkeys(grupos_selecionados))
-
-            for g in grupos_selecionados:
-                # 3. Filtra o grupo e remove quem não tem o par completo usando as chaves seguras (c_ini, c_fin)
-                if g == "Geral (Todos os Grupos)":
-                    df_g = df_plot.dropna(subset=[c_ini, c_fin])
-                else:
-                    df_g = df_plot[df_plot['grupo_comparacao'] == g].dropna(subset=[c_ini, c_fin])
-                
-                n_pares = len(df_g)
-                
-                # Só calcula se houver amostra suficiente para variância (n > 1)
-                if n_pares > 1:
-                    pre_vals = df_g[c_ini]
-                    pos_vals = df_g[c_fin]
-                    
-                    # Cálculos da Diferença
-                    diff = pos_vals - pre_vals
-                    mean_diff = diff.mean()
-                    std_diff = diff.std(ddof=1)
-                    se_diff = std_diff / np.sqrt(n_pares)
-                    
-                    # Teste t pareado
-                    t_stat, p_val = stats.ttest_rel(pos_vals, pre_vals)
-
-                    p_val_display = f"{p_val:.4e}" if p_val < 0.001 else p_val
-                    
-                    # Tamanho do Efeito (Cohen's d)
-                    d_cohen = mean_diff / std_diff if std_diff != 0 else 0
-
-                    # Intervalo de Confiança (95%)
-                    t_crit = stats.t.ppf(0.975, df=n_pares-1)
-                    margin_error = t_crit * (std_diff / np.sqrt(n_pares))
-                    ci_lower = mean_diff - margin_error
-                    ci_upper = mean_diff + margin_error
-                    
-                    resultados_stats.append({
-                        "Grupo": g,
-                        "N (Pares)": n_pares,
-                        "Média (Pré)": pre_vals.mean(),
-                        "Média (Pós)": pos_vals.mean(),
-                        "Efeito (Δ)": mean_diff,
-                        "Cohen's d": d_cohen,
-                        "IC 95% Inferior": ci_lower,
-                        "IC 95% Superior": ci_upper,
-                        "P-Valor": p_val_display
-                    })
-
-            # Exibição da Tabela
-            if resultados_stats:
-                df_stats_pareado = pd.DataFrame(resultados_stats)
-                
-                # Destaca a linha "Geral" para fácil visualização
-                def style_geral(row):
-                    if row['Grupo'] == "Geral (Todos os Grupos)":
-                        return ['background-color: #f0f2f6; font-weight: bold'] * len(row)
-                    return [''] * len(row)
-
-                st.dataframe(
-                    df_stats_pareado.style.apply(style_geral, axis=1),
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "Média (Pré)": st.column_config.NumberColumn(format="%.2f"),
-                        "Média (Pós)": st.column_config.NumberColumn(format="%.2f"),
-                        "Efeito (Δ)": st.column_config.NumberColumn(format="%+.2f"),
-                        "Cohen's d": st.column_config.NumberColumn(format="%+.3f"),
-                        "IC 95% Inferior": st.column_config.NumberColumn(format="%.2f"),
-                        "IC 95% Superior": st.column_config.NumberColumn(format="%.2f"),
-                        "P-Valor": st.column_config.TextColumn("P-Valor")
-                    }
+            col_met1, col_met2 = st.columns([3, 1])
+            with col_met1:
+                metrica_teste = st.selectbox("Selecione a métrica para o Teste Pareado:", list(opcoes_stats.keys()), key="sel_stat_pareado")
+                c_ini, c_fin = opcoes_stats[metrica_teste]
+            with col_met2:
+                st.write("")
+                st.write("")
+                excel_bytes = gerar_excel_pareado(df_plot, opcoes_stats, grupos_disponiveis)
+                st.download_button(
+                    label="📥 Exportar Todas (Excel)",
+                    data=excel_bytes,
+                    file_name="estatisticas_pareadas_completa.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
                 )
-            else:
-                st.warning("Não há dados pareados suficientes (Pré e Pós) para calcular a estatística.")
+
+            # Gera todas as combinações paramétricas para a interface em tela
+            combinacoes = list(itertools.combinations(grupos_disponiveis, 2))
+            
+            for g1, g2 in combinacoes:
+                st.markdown(f"**Comparação: {g1} vs {g2}**")
+                resultados_stats = []
+                
+                for g in [g1, g2]:
+                    # 3. Filtra o grupo e remove quem não tem o par completo usando as chaves seguras (c_ini, c_fin)
+                    df_g = df_plot[df_plot['grupo_comparacao'] == g].dropna(subset=[c_ini, c_fin])
+                    
+                    n_pares = len(df_g)
+                    
+                    # Só calcula se houver amostra suficiente para variância (n > 1)
+                    if n_pares > 1:
+                        pre_vals = df_g[c_ini]
+                        pos_vals = df_g[c_fin]
+                        
+                        # Cálculos da Diferença
+                        diff = pos_vals - pre_vals
+                        mean_diff = diff.mean()
+                        std_diff = diff.std(ddof=1)
+                        se_diff = std_diff / np.sqrt(n_pares)
+                        
+                        # Teste t pareado
+                        t_stat, p_val = stats.ttest_rel(pos_vals, pre_vals)
+
+                        p_val_display = f"{p_val:.4e}" if p_val < 0.001 else p_val
+                        
+                        # Tamanho do Efeito (Cohen's d)
+                        d_cohen = mean_diff / std_diff if std_diff != 0 else 0
+
+                        # Intervalo de Confiança (95%)
+                        t_crit = stats.t.ppf(0.975, df=n_pares-1)
+                        margin_error = t_crit * (std_diff / np.sqrt(n_pares))
+                        ci_lower = mean_diff - margin_error
+                        ci_upper = mean_diff + margin_error
+                        
+                        resultados_stats.append({
+                            "Grupo": g,
+                            "N (Pares)": n_pares,
+                            "Média (Pré)": pre_vals.mean(),
+                            "Média (Pós)": pos_vals.mean(),
+                            "Efeito (Δ)": mean_diff,
+                            "Cohen's d": d_cohen,
+                            "IC 95% Inferior": ci_lower,
+                            "IC 95% Superior": ci_upper,
+                            "P-Valor": p_val_display
+                        })
+
+                # Exibição da Tabela para cada combinação
+                if resultados_stats:
+                    df_stats_pareado = pd.DataFrame(resultados_stats)
+                    
+                    st.dataframe(
+                        df_stats_pareado,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Média (Pré)": st.column_config.NumberColumn(format="%.2f"),
+                            "Média (Pós)": st.column_config.NumberColumn(format="%.2f"),
+                            "Efeito (Δ)": st.column_config.NumberColumn(format="%+.2f"),
+                            "Cohen's d": st.column_config.NumberColumn(format="%+.3f"),
+                            "IC 95% Inferior": st.column_config.NumberColumn(format="%.2f"),
+                            "IC 95% Superior": st.column_config.NumberColumn(format="%.2f"),
+                            "P-Valor": st.column_config.TextColumn("P-Valor")
+                        }
+                    )
+                else:
+                    st.warning(f"Não há dados pareados suficientes (Pré e Pós) para calcular a estatística entre {g1} e {g2}.")
 
             st.divider()
 
@@ -1321,6 +1395,8 @@ if df_bruto is not None:
                 if 'nota' in nome: return 'Nota Geral'
                 if 'seguranca_financeira' in nome: return 'Segurança Financeira'
                 if 'comportamento_financeiro' in nome: return 'Comportamento Financeiro'
+                if 'habitos_organizacao' in nome: return 'Hábitos/Organização'
+                if 'confianca' in nome: return 'Confiança'
                 return nome.upper()
                 
             df_melt_all['metrica'] = df_melt_all['coluna_original'].apply(limpar_nome_metrica)
@@ -1387,76 +1463,79 @@ if df_bruto is not None:
             Visualize como um "território" de competências: a expansão da área roxa sobre a azul 
             indica o impacto sistêmico da intervenção nos hábitos financeiros.
             """)
+            pontas_radar = st.radio(
+                "Visão do Radar (Pontas da Teia):", 
+                ["Todas as Questões Limpas (Q1-Q13)", "4 Dimensões de Saúde Financeira (ISFB)"], 
+                horizontal=True, 
+                key="radar_tips"
+            )
             
-            # Reutiliza a lista de grupos para o filtro do Radar
-            grupos_disp_radar = ["Todos os Grupos"] + list(df_plot['grupo_comparacao'].dropna().unique())
-            grupo_radar_sel = st.selectbox("Selecione o Grupo para o Radar:", grupos_disp_radar, key="radar_grp")
+            grupos_radar = list(df_plot['grupo_comparacao'].dropna().unique())
+            radar_cols = st.columns(3)
             
-            # Filtra os dados
-            df_radar = df_plot if grupo_radar_sel == "Todos os Grupos" else df_plot[df_plot['grupo_comparacao'] == grupo_radar_sel]
-            
-            # Define as colunas que alimentam o radar (IGNORANDO A Q11)
-            qs_ini = [f"q{i}_inicial" for i in range(1, 14) if i != 11]
-            qs_fin = [f"q{i}_final" for i in range(1, 14) if i != 11]
-            
-            # Pega apenas as colunas que realmente existem no df
-            val_ini_cols = [c for c in qs_ini if c in df_radar.columns]
-            val_fin_cols = [c for c in qs_fin if c in df_radar.columns]
-            
-            if val_ini_cols and val_fin_cols:
-                # Calcula a média (ignorando nulos)
-                medias_ini = df_radar[val_ini_cols].mean().tolist()
-                medias_fin = df_radar[val_fin_cols].mean().tolist()
+            for idx, g in enumerate(grupos_radar):
+                df_radar = df_plot[df_plot['grupo_comparacao'] == g]
                 
-                # Monta os rótulos (Q1, Q2, Q3...)
-                labels_radar = [c.split('_')[0].upper() for c in val_ini_cols]
+                if "4 Dimensões" in pontas_radar:
+                    qs_ini = ["seguranca_financeira_inicial", "comportamento_financeiro_inicial", "habitos_organizacao_inicial", "confianca_inicial"]
+                    qs_fin = ["seguranca_financeira_final", "comportamento_financeiro_final", "habitos_organizacao_final", "confianca_final"]
+                    base_labels = ["Segurança Fin.", "Comportamento Fin.", "Hábitos/Org.", "Confiança"]
+                else:
+                    qs_ini = [f"q{i}_inicial" for i in range(1, 14) if i != 11]
+                    qs_fin = [f"q{i}_final" for i in range(1, 14) if i != 11]
+                    base_labels = [c.split('_')[0].upper() for c in qs_ini]
                 
-                # O Pulo do Gato do Radar: Precisamos duplicar o primeiro valor no final da lista 
-                # para que o Plotly "feche" o círculo (conhecido como "fechar o polígono").
-                medias_ini += [medias_ini[0]]
-                medias_fin += [medias_fin[0]]
-                labels_radar += [labels_radar[0]]
+                val_ini_cols = [c for c in qs_ini if c in df_radar.columns]
+                val_fin_cols = [c for c in qs_fin if c in df_radar.columns]
                 
-                # Encontra o valor máximo para travar a escala geométrica do gráfico
-                max_radar_val = max(max(medias_ini, default=0), max(medias_fin, default=0))
-                
-                fig_radar = go.Figure()
-                
-                # Traço Inicial (Pré)
-                fig_radar.add_trace(go.Scatterpolar(
-                    r=medias_ini,
-                    theta=labels_radar,
-                    fill='toself',
-                    name='Pré-Intervenção',
-                    line_color='#B3CDE3',
-                    fillcolor='rgba(179, 205, 227, 0.4)' # Leve transparência
-                ))
-                
-                # Traço Final (Pós)
-                fig_radar.add_trace(go.Scatterpolar(
-                    r=medias_fin,
-                    theta=labels_radar,
-                    fill='toself',
-                    name='Pós-Intervenção',
-                    line_color='#8856A7',
-                    fillcolor='rgba(136, 86, 167, 0.4)'
-                ))
-                
-                fig_radar.update_layout(
-                    polar=dict(
-                        radialaxis=dict(
-                            visible=True,
-                            range=[0, max_radar_val * 1.1] # Dá uma margem de segurança de 10%
+                with radar_cols[idx % 3]:
+                    if val_ini_cols and val_fin_cols:
+                        medias_ini = df_radar[val_ini_cols].mean().tolist()
+                        medias_fin = df_radar[val_fin_cols].mean().tolist()
+                        
+                        labels_radar = list(base_labels)
+                        
+                        # Fechar polígono
+                        medias_ini += [medias_ini[0]]
+                        medias_fin += [medias_fin[0]]
+                        labels_radar += [labels_radar[0]]
+                        
+                        max_radar_val = max(max(medias_ini, default=0), max(medias_fin, default=0))
+                        
+                        fig_radar = go.Figure()
+                        
+                        # Traço Final (Pós) PRIMEIRO para ficar EMBAIXO da linha inicial
+                        fig_radar.add_trace(go.Scatterpolar(
+                            r=medias_fin,
+                            theta=labels_radar,
+                            fill='toself',
+                            name='Pós-Intervenção',
+                            line_color='#8856A7',
+                            fillcolor='rgba(136, 86, 167, 0.4)'
+                        ))
+                        
+                        # Traço Inicial (Pré) DEPOIS para ficar SOBRE a linha final
+                        fig_radar.add_trace(go.Scatterpolar(
+                            r=medias_ini,
+                            theta=labels_radar,
+                            fill='toself',
+                            name='Pré-Intervenção',
+                            line_color='#B3CDE3',
+                            fillcolor='rgba(179, 205, 227, 0.4)'
+                        ))
+                        
+                        fig_radar.update_layout(
+                            polar=dict(
+                                radialaxis=dict(visible=True, range=[0, max_radar_val * 1.1])
+                            ),
+                            showlegend=(idx == 0),  # Mostra legenda apenas no primeiro gráfico para poupar espaço
+                            title=dict(text=g, font=dict(size=14)),
+                            margin=dict(l=30, r=30, t=50, b=20)
                         )
-                    ),
-                    showlegend=True,
-                    title=f"Expansão das competências ({grupo_radar_sel})"
-                )
-                
-                st.plotly_chart(fig_radar, use_container_width=True)
-            else:
-                st.warning("Colunas de questões numéricas não encontradas para gerar o Radar.")
-
+                        st.plotly_chart(fig_radar, use_container_width=True)
+                    else:
+                        st.warning(f"Faltam colunas numéricas no grupo {g}")
+            
             st.divider()
 
             # --- 3. FLUXO DE MUDANÇA (SANKEY DIAGRAM) ---
