@@ -130,12 +130,14 @@ try:
     df_cadastros_unicos = df_cadastros.drop_duplicates(subset=['CNPJ_clean'])
     df_analise = pd.merge(
         df_mensagens, 
-        df_cadastros_unicos[['CNPJ_clean', 'Data de cadastro', 'data_cadastro_dt', 'UF', 'Ativo']], 
+        df_cadastros_unicos[['CNPJ_clean', 'Data de cadastro', 'data_cadastro_dt', 'UF', 'Ativo', 'CNAE']], 
         on='CNPJ_clean', 
         how='left'
     )
 
-    df_analise['converteu'] = df_analise['Data de cadastro'].notna()
+    dt_inicio_int = pd.to_datetime("2026-03-26")
+    dt_fim_int = pd.to_datetime("2026-04-05")
+    df_analise['converteu'] = df_analise['data_cadastro_dt'].notna() & (df_analise['data_cadastro_dt'] >= dt_inicio_int) & (df_analise['data_cadastro_dt'] <= dt_fim_int)
     df_analise['mensagem_lida'] = pd.to_numeric(df_analise['mensagem_lida'], errors='coerce').fillna(0)
 
 except Exception as e:
@@ -196,26 +198,43 @@ with tab_geral:
 
     coluna_grupo = 'Grupo'
     if coluna_grupo in df_analise.columns:
-        df_grupos = df_analise.groupby(coluna_grupo).agg({'CNPJ_clean': 'count', 'mensagem_lida': 'sum', 'converteu': 'sum'}).reset_index()
-        df_grupos.columns = ['Grupo', 'Enviados', 'Lidas', 'Convertidos']
-        df_grupos['Taxa de Leitura (%)'] = (df_grupos['Lidas'] / df_grupos['Enviados'] * 100).round(4)
-        df_grupos['Taxa de Conversão (%)'] = (df_grupos['Convertidos'] / df_grupos['Enviados'] * 100).round(4)
-        df_grupos = df_grupos.sort_values('Taxa de Conversão (%)', ascending=False)
-
-        col_tabela, col_grafico = st.columns([1, 2])
-        with col_tabela:
-            st.write("**Resumo por Mensagem:**")
-            st.dataframe(df_grupos, use_container_width=True, hide_index=True,
-                         column_config={"Taxa de Leitura (%)": st.column_config.NumberColumn(format="%.4f %%"),
-                                        "Taxa de Conversão (%)": st.column_config.NumberColumn(format="%.4f %%")})
-        with col_grafico:
-            metrica_alvo = st.radio("Métrica para o gráfico:", ["Taxa de Conversão (%)", "Taxa de Leitura (%)"], horizontal=True)
-            fig_conv = px.bar(df_grupos.sort_values(metrica_alvo, ascending=False), x='Grupo', y=metrica_alvo,
-                              text=metrica_alvo, title=f"Comparativo de {metrica_alvo.replace(' (%)', '')} por Grupo",
-                              color='Grupo', color_discrete_sequence=px.colors.qualitative.Prism)
-            fig_conv.update_traces(texttemplate='%{text:.4f}%', textposition='outside')
-            fig_conv.update_layout(yaxis=dict(range=[0, df_grupos[metrica_alvo].max() * 1.2]))
-            st.plotly_chart(fig_conv, use_container_width=True)
+        has_push_env = 'notificacao_push_enviada' in df_analise.columns
+        has_push_rec = 'notificacao_push_recebida' in df_analise.columns
+        
+        agg_cols = {'CNPJ_clean': 'count', 'mensagem_lida': 'sum', 'converteu': 'sum'}
+        if has_push_env: 
+            df_analise['notificacao_push_enviada'] = pd.to_numeric(df_analise['notificacao_push_enviada'], errors='coerce').fillna(0)
+            agg_cols['notificacao_push_enviada'] = 'sum'
+        if has_push_rec: 
+            df_analise['notificacao_push_recebida'] = pd.to_numeric(df_analise['notificacao_push_recebida'], errors='coerce').fillna(0)
+            agg_cols['notificacao_push_recebida'] = 'sum'
+            
+        df_grupos = df_analise.groupby(coluna_grupo).agg(agg_cols).reset_index()
+        
+        rename_map = {
+            'Grupo': 'Total Grupo', 'CNPJ_clean': 'Total envios', 
+            'mensagem_lida': 'Total de lidas', 'converteu': 'Total cadastrados'
+        }
+        if has_push_env: rename_map['notificacao_push_enviada'] = 'Total notificação de push enviadas'
+        if has_push_rec: rename_map['notificacao_push_recebida'] = 'total notificacoes push recebidas'
+        df_grupos.rename(columns=rename_map, inplace=True)
+        
+        df_grupos['taxa de leitura'] = (df_grupos['Total de lidas'] / df_grupos['Total envios'] * 100).round(4)
+        df_grupos['Taxa de conversão'] = (df_grupos['Total cadastrados'] / df_grupos['Total envios'] * 100).round(4)
+        
+        st.write("**Resumo por Mensagem:**")
+        st.dataframe(df_grupos.sort_values('Taxa de conversão', ascending=False), use_container_width=True, hide_index=True,
+                     column_config={"taxa de leitura": st.column_config.NumberColumn(format="%.4f %%"),
+                                    "Taxa de conversão": st.column_config.NumberColumn(format="%.4f %%")})
+        
+        st.divider()
+        metrica_alvo = st.radio("Métrica para o gráfico:", ["Taxa de conversão", "taxa de leitura"], horizontal=True)
+        fig_conv = px.bar(df_grupos.sort_values(metrica_alvo, ascending=False), x='Total Grupo', y=metrica_alvo,
+                          text=metrica_alvo, title=f"Comparativo de Performance: {metrica_alvo}",
+                          color='Total Grupo', color_discrete_sequence=px.colors.qualitative.Prism)
+        fig_conv.update_traces(texttemplate='%{text:.4f}%', textposition='outside')
+        fig_conv.update_layout(yaxis=dict(range=[0, df_grupos[metrica_alvo].max() * 1.2]))
+        st.plotly_chart(fig_conv, use_container_width=True)
 
     st.subheader("🌪️ Funil de Engajamento")
     fig_funil = go.Figure(go.Funnel(
@@ -224,6 +243,32 @@ with tab_geral:
         textinfo="value+percent initial", marker=dict(color=["#B3CDE3", "#8C96C6", "#8856A7"])
     ))
     st.plotly_chart(fig_funil, use_container_width=True)
+    
+    st.divider()
+    st.markdown("#### CNPJs Convertidos (Cadastrados na Janela)")
+    df_convertidos = df_analise[df_analise['converteu']].copy()
+    
+    if 'data_cadastro_dt' in df_convertidos.columns and 'data_leitura_dt' in df_convertidos.columns:
+        df_convertidos['Periodo total da janela de cadastros'] = (df_convertidos['data_cadastro_dt'] - df_convertidos['data_leitura_dt']).dt.days
+        
+        # Em casos onde leitura e conversão rodam na bordinha da meia-noite gerando artefatos negativos, truncamos para 'Mesmo Dia' (0)
+        df_convertidos.loc[df_convertidos['Periodo total da janela de cadastros'] < 0, 'Periodo total da janela de cadastros'] = 0
+    else:
+        df_convertidos['Periodo total da janela de cadastros'] = None
+        
+    map_cols_cnpjs = {
+        'CNPJ': 'CNPJ', 'cpf': 'CPF', 'CNAE_x': 'CNAE', 
+        'data_leitura': 'data de leitura mensagem', 'Data de cadastro': 'data de cadastro',
+        'Periodo total da janela de cadastros': 'Periodo total da janela de cadastros'
+    }
+    
+    cols_existentes = [c for c in map_cols_cnpjs.keys() if c in df_convertidos.columns]
+    df_lista_cnpjs = df_convertidos[cols_existentes].rename(columns=map_cols_cnpjs)
+    st.dataframe(df_lista_cnpjs, use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.markdown("#### 🗄️ Tabela Completa (Dados Brutos Consolidados)")
+    st.dataframe(df_analise, use_container_width=True)
 
 # ---------------------------------------------------------
 # ABA 2: LABORATÓRIO ESTATÍSTICO
