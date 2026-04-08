@@ -243,7 +243,11 @@ with tab_geral:
                      })
         
         st.divider()
-        metrica_alvo = st.radio("Métrica para o gráfico:", ["Taxa de conversão", "taxa de leitura"], horizontal=True)
+        opcoes_metrica = ["Taxa de conversão", "taxa de leitura", "Conversão diagnóstica (Cadastros/Lidas)"]
+        if 'Taxa Lidas / Push Recebidas' in df_grupos.columns:
+            opcoes_metrica.append("Taxa Lidas / Push Recebidas")
+            
+        metrica_alvo = st.radio("Métrica para o gráfico:", opcoes_metrica, horizontal=True)
         fig_conv = px.bar(df_grupos.sort_values(metrica_alvo, ascending=False), x='Total Grupo', y=metrica_alvo,
                           text=metrica_alvo, title=f"Comparativo de Performance: {metrica_alvo}",
                           color='Total Grupo', color_discrete_sequence=px.colors.qualitative.Prism)
