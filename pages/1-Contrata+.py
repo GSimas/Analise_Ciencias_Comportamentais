@@ -228,24 +228,33 @@ with tab_geral:
                 axis=1
             ).astype(float).round(4)
             
-        df_grupos['Conversão diagnóstica (Cadastros/Lidas)'] = df_grupos.apply(
+            df_grupos['Taxa Cadastros / Push Recebidos'] = df_grupos.apply(
+                lambda row: (row['Total cadastrados'] / row['total notificacoes push recebidas'] * 100) if row['total notificacoes push recebidas'] > 0 else 0, 
+                axis=1
+            ).astype(float).round(4)
+            
+        df_grupos['Taxa Cadastros / Lidas'] = df_grupos.apply(
             lambda row: (row['Total cadastrados'] / row['Total de lidas'] * 100) if row['Total de lidas'] > 0 else 0, 
             axis=1
         ).astype(float).round(4)
         
         st.write("**Resumo por Mensagem:**")
-        st.dataframe(df_grupos.sort_values('Taxa de conversão', ascending=False), use_container_width=True, hide_index=True,
-                     column_config={
-                         "taxa de leitura": st.column_config.NumberColumn(format="%.4f %%"),
-                         "Taxa de conversão": st.column_config.NumberColumn(format="%.4f %%"),
-                         "Taxa Lidas / Push Recebidas": st.column_config.NumberColumn(format="%.4f %%"),
-                         "Conversão diagnóstica (Cadastros/Lidas)": st.column_config.NumberColumn(format="%.4f %%")
-                     })
+        
+        col_cfg = {
+            "taxa de leitura": st.column_config.NumberColumn(format="%.4f %%"),
+            "Taxa de conversão": st.column_config.NumberColumn(format="%.4f %%"),
+            "Taxa Lidas / Push Recebidas": st.column_config.NumberColumn(format="%.4f %%"),
+            "Taxa Cadastros / Push Recebidos": st.column_config.NumberColumn(format="%.4f %%"),
+            "Taxa Cadastros / Lidas": st.column_config.NumberColumn(format="%.4f %%")
+        }
+        
+        st.dataframe(df_grupos.sort_values('Taxa de conversão', ascending=False), use_container_width=True, hide_index=True, column_config=col_cfg)
         
         st.divider()
-        opcoes_metrica = ["Taxa de conversão", "taxa de leitura", "Conversão diagnóstica (Cadastros/Lidas)"]
+        opcoes_metrica = ["Taxa de conversão", "taxa de leitura", "Taxa Cadastros / Lidas"]
         if 'Taxa Lidas / Push Recebidas' in df_grupos.columns:
             opcoes_metrica.append("Taxa Lidas / Push Recebidas")
+            opcoes_metrica.append("Taxa Cadastros / Push Recebidos")
             
         metrica_alvo = st.radio("Métrica para o gráfico:", opcoes_metrica, horizontal=True)
         fig_conv = px.bar(df_grupos.sort_values(metrica_alvo, ascending=False), x='Total Grupo', y=metrica_alvo,
@@ -276,7 +285,7 @@ with tab_geral:
         df_convertidos['Periodo total da janela de cadastros'] = None
         
     map_cols_cnpjs = {
-        'CNPJ': 'CNPJ', 'cpf': 'CPF', 'CNAE_x': 'CNAE', 
+        'CNPJ': 'CNPJ', 'cpf': 'CPF', 'Grupo': 'Tipo de Mensagem', 'CNAE_x': 'CNAE', 
         'data_leitura': 'data de leitura mensagem', 'notificacao_push_recebida': 'notificação push recebida',
         'Data de cadastro': 'data de cadastro',
         'Periodo total da janela de cadastros': 'Periodo total da janela de cadastros'
@@ -286,6 +295,67 @@ with tab_geral:
     df_lista_cnpjs = df_convertidos[cols_existentes].rename(columns=map_cols_cnpjs)
     st.dataframe(df_lista_cnpjs, use_container_width=True, hide_index=True)
 
+    st.divider()
+    st.markdown("#### ⏳ Análise Temporal de Impacto (D0 a D+)")
+    st.info("Aferição do ciclo de adoção: como os cadastros fluíram no tempo após o disparo original (26/03/2026).")
+    
+    tipo_filtro_tempo = st.radio(
+        "Filtro de Amostragem do Funil Temporal:",
+        ["Apenas Convertidos (Impactados pelas Intervenções)", "Totais da Plataforma (Incluindo Tráfego Orgânico)"],
+        horizontal=True
+    )
+    
+    dt_disparo_oficial = pd.to_datetime("2026-03-26")
+    
+    # Roteador de Dataset Baseado na Opção
+    if "Apenas" in tipo_filtro_tempo:
+        df_base_tempo = df_convertidos.copy()
+    else:
+        df_base_tempo = df_cadastros_unicos.copy()
+        # Se for Totais, resgata marcação original de grupo para pintar quem foi Intervenção e nomeia o resto como Orgânico
+        df_tmp_grupos = df_analise.dropna(subset=['Grupo']).drop_duplicates(subset=['CNPJ_clean'])[['CNPJ_clean', 'Grupo']]
+        df_base_tempo = df_base_tempo.merge(df_tmp_grupos, on='CNPJ_clean', how='left')
+        df_base_tempo['Grupo'] = df_base_tempo['Grupo'].fillna("Sem Contato (Orgânico)")
+
+    if 'data_cadastro_dt' in df_base_tempo.columns:
+        df_base_tempo['Dias apos disparo'] = (df_base_tempo['data_cadastro_dt'] - dt_disparo_oficial).dt.days
+        
+        # Filtra a janela útil assumindo a timeline até o fim pedido (D11)
+        df_tempo = df_base_tempo[(df_base_tempo['Dias apos disparo'] >= 0) & (df_base_tempo['Dias apos disparo'] <= 11)]
+        
+        if not df_tempo.empty and 'Grupo' in df_tempo.columns:
+            df_tempo['D_label'] = 'D' + df_tempo['Dias apos disparo'].astype(str)
+            df_tempo_grp = df_tempo.groupby(['Grupo', 'Dias apos disparo', 'D_label']).size().reset_index(name='Cadastros')
+            
+            tipo_serie = st.selectbox("Apresentação dos Valores:", ["Quantidade por Dia (Absoluto Diário)", "Acumulado ao longo dos Dias (Evolução Contínua)"])
+            
+            df_plot = df_tempo_grp.sort_values(by=['Grupo', 'Dias apos disparo']).copy()
+            
+            if "Acumulado" in tipo_serie:
+                df_plot['Cadastros'] = df_plot.groupby('Grupo')['Cadastros'].cumsum()
+                
+            ordem_dias = sorted(df_plot['D_label'].unique(), key=lambda x: int(x[1:]))
+            
+            fig_tempo = px.bar(df_plot.sort_values('Dias apos disparo'), x='D_label', y='Cadastros', color='Grupo', 
+                               barmode='group', title="Curva de Adoção: Volume Temporal de Cadastros",
+                               category_orders={'D_label': ordem_dias},
+                               color_discrete_sequence=px.colors.qualitative.Prism, text='Cadastros')
+            fig_tempo.update_traces(textposition='outside')
+            
+            fig_tempo.update_layout(xaxis_title="Dias Decorridos do Disparo Original (26/03)", yaxis_title="Cadastros")
+            st.plotly_chart(fig_tempo, use_container_width=True)
+            
+            # Tabela Pivot de evolução D0..DN
+            df_pivot_t = df_tempo_grp.pivot(index='Grupo', columns='D_label', values='Cadastros').fillna(0).astype(int)
+            cols_d = sorted(df_pivot_t.columns, key=lambda x: int(x[1:]))
+            df_pivot_t = df_pivot_t[cols_d]
+            df_pivot_t['Acumulado da Janela'] = df_pivot_t.sum(axis=1)
+            
+            st.write("**Matriz Diária Absoluta (Ciclo de Maturação Automática):**")
+            st.dataframe(df_pivot_t.reset_index(), use_container_width=True, hide_index=True)
+        else:
+            st.warning("Não há dados formatados o suficiente na esteira temporal para esta métrica gráfica.")
+            
     st.divider()
     st.markdown("#### 🗄️ Tabela Completa (Dados Brutos Consolidados)")
     st.dataframe(df_analise, use_container_width=True)
