@@ -1323,7 +1323,7 @@ if df_bruto is not None:
                             std_diff = diff.std(ddof=1)
                             
                             t_stat, p_val = stats.ttest_rel(pos_vals, pre_vals)
-                            p_val_display = f"{p_val:.4e}" if p_val < 0.001 else p_val
+                            p_val_display = f"{p_val:.4e}" if pd.notna(p_val) and p_val < 0.001 else (f"{p_val:.4f}" if pd.notna(p_val) else "NaN")
                             
                             d_cohen = mean_diff / std_diff if std_diff != 0 else 0
                             
@@ -1387,11 +1387,26 @@ if df_bruto is not None:
                         
                         # Teste-T Não-Pareado (Independente) testando se a Diferença é = 0, aceitando variâncias marginais diferentes (equal_var=False)
                         t_stat, p_val = stats.ttest_ind(delta_g1, delta_g2, equal_var=False)
-                        p_val_display = f"{p_val:.4e}" if p_val < 0.001 else p_val
+                        p_val_display = f"{p_val:.4e}" if pd.notna(p_val) and p_val < 0.001 else (f"{p_val:.4f}" if pd.notna(p_val) else "NaN")
                         
                         # Cohen's d cruzado de variâncias conjuntas amostrais
                         s_pool = np.sqrt(((n1 - 1) * std_d1**2 + (n2 - 1) * std_d2**2) / (n1 + n2 - 2)) if (n1 + n2 - 2) > 0 else 0
                         d_cohen_delta = diff_deltas / s_pool if s_pool != 0 else 0
+                        
+                        # IC 95% do Efeito (Welch-Satterthwaite)
+                        v1, v2 = (std_d1**2) / n1, (std_d2**2) / n2
+                        se_diff = np.sqrt(v1 + v2)
+                        
+                        # Grau de liberdade de Welch para IC
+                        den_welch = (v1**2 / (n1 - 1)) + (v2**2 / (n2 - 1))
+                        if se_diff > 0 and den_welch > 0:
+                            df_welch = ((v1 + v2)**2) / den_welch
+                            t_crit = stats.t.ppf(0.975, df=df_welch)
+                            margin_error = t_crit * se_diff
+                            ci_lower = diff_deltas - margin_error
+                            ci_upper = diff_deltas + margin_error
+                        else:
+                            ci_lower, ci_upper = 0, 0
                         
                         if pd.isna(p_val):
                             parecer_teste = "Indeterminado"
@@ -1408,6 +1423,8 @@ if df_bruto is not None:
                             f"Δ Médio ({g2[:10]})": mean_d2,
                             "Diferença de Efeitos (ΔΔ)": diff_deltas,
                             "Cohen's d (ΔΔ)": d_cohen_delta,
+                            "IC 95% Inf (ΔΔ)": ci_lower,
+                            "IC 95% Sup (ΔΔ)": ci_upper,
                             "P-Valor (ΔΔ)": p_val_display,
                             "Parecer do Teste ΔΔ": parecer_teste
                         }]
@@ -1423,6 +1440,8 @@ if df_bruto is not None:
                                 f"Δ Médio ({g2[:10]})": st.column_config.NumberColumn(format="%+.2f"),
                                 "Diferença de Efeitos (ΔΔ)": st.column_config.NumberColumn(format="%+.2f"),
                                 "Cohen's d (ΔΔ)": st.column_config.NumberColumn(format="%+.3f"),
+                                "IC 95% Inf (ΔΔ)": st.column_config.NumberColumn(format="%+.2f"),
+                                "IC 95% Sup (ΔΔ)": st.column_config.NumberColumn(format="%+.2f"),
                                 "P-Valor (ΔΔ)": st.column_config.TextColumn("P-Valor")
                             }
                         )
