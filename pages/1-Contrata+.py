@@ -170,7 +170,7 @@ with st.sidebar.expander("🛠️ Ver Colunas Processadas"):
 
 st.sidebar.divider()
 csv_export = df_analise.to_csv(index=False).encode('utf-8')
-st.sidebar.download_button(label="📥 Baixar Base Cruzada", data=csv_export, file_name="base_contrata_mais.csv", mime="text/csv", use_container_width=True)
+st.sidebar.download_button(label="📥 Baixar Base Cruzada", data=csv_export, file_name="base_contrata_mais.csv", mime="text/csv", width='stretch')
 
 # ==========================================
 # 4. INTERFACE PRINCIPAL (DASHBOARD)
@@ -248,7 +248,7 @@ with tab_geral:
             "Taxa Cadastros / Lidas": st.column_config.NumberColumn(format="%.4f %%")
         }
         
-        st.dataframe(df_grupos.sort_values('Taxa de conversão', ascending=False), use_container_width=True, hide_index=True, column_config=col_cfg)
+        st.dataframe(df_grupos.sort_values('Taxa de conversão', ascending=False), width='stretch', hide_index=True, column_config=col_cfg)
         
         st.divider()
         opcoes_metrica = ["Taxa de conversão", "taxa de leitura", "Taxa Cadastros / Lidas"]
@@ -262,7 +262,7 @@ with tab_geral:
                           color='Total Grupo', color_discrete_sequence=px.colors.qualitative.Prism)
         fig_conv.update_traces(texttemplate='%{text:.4f}%', textposition='outside')
         fig_conv.update_layout(yaxis=dict(range=[0, df_grupos[metrica_alvo].max() * 1.2]))
-        st.plotly_chart(fig_conv, use_container_width=True)
+        st.plotly_chart(fig_conv, width='stretch')
 
     st.subheader("🌪️ Funil de Engajamento")
     fig_funil = go.Figure(go.Funnel(
@@ -270,7 +270,7 @@ with tab_geral:
         x=[total_enviado, int(total_lido), int(total_convertido)],
         textinfo="value+percent initial", marker=dict(color=["#B3CDE3", "#8C96C6", "#8856A7"])
     ))
-    st.plotly_chart(fig_funil, use_container_width=True)
+    st.plotly_chart(fig_funil, width='stretch')
     
     st.divider()
     st.markdown("#### CNPJs Convertidos (Cadastrados na Janela)")
@@ -293,7 +293,7 @@ with tab_geral:
     
     cols_existentes = [c for c in map_cols_cnpjs.keys() if c in df_convertidos.columns]
     df_lista_cnpjs = df_convertidos[cols_existentes].rename(columns=map_cols_cnpjs)
-    st.dataframe(df_lista_cnpjs, use_container_width=True, hide_index=True)
+    st.dataframe(df_lista_cnpjs, width='stretch', hide_index=True)
 
     st.divider()
     st.markdown("#### ⏳ Análise Temporal de Impacto (D0 a D+)")
@@ -343,7 +343,7 @@ with tab_geral:
             fig_tempo.update_traces(textposition='outside')
             
             fig_tempo.update_layout(xaxis_title="Dias Decorridos do Disparo Original (26/03)", yaxis_title="Cadastros")
-            st.plotly_chart(fig_tempo, use_container_width=True)
+            st.plotly_chart(fig_tempo, width='stretch')
             
             # Tabela Pivot de evolução D0..DN
             df_pivot_t = df_tempo_grp.pivot(index='Grupo', columns='D_label', values='Cadastros').fillna(0).astype(int)
@@ -352,13 +352,13 @@ with tab_geral:
             df_pivot_t['Acumulado da Janela'] = df_pivot_t.sum(axis=1)
             
             st.write("**Matriz Diária Absoluta (Ciclo de Maturação Automática):**")
-            st.dataframe(df_pivot_t.reset_index(), use_container_width=True, hide_index=True)
+            st.dataframe(df_pivot_t.reset_index(), width='stretch', hide_index=True)
         else:
             st.warning("Não há dados formatados o suficiente na esteira temporal para esta métrica gráfica.")
             
     st.divider()
     st.markdown("#### 🗄️ Tabela Completa (Dados Brutos Consolidados)")
-    st.dataframe(df_analise, use_container_width=True)
+    st.dataframe(df_analise, width='stretch')
 
 # ---------------------------------------------------------
 # ABA 2: LABORATÓRIO ESTATÍSTICO
@@ -433,7 +433,7 @@ with tab_estatistica:
         }])
         
         st.write(f"**Comparação Global: Existe alguma diferença estatística na {nome_metrica} entre os Tipos de Mensagens?**")
-        st.dataframe(res_global, use_container_width=True, hide_index=True)
+        st.dataframe(res_global, width='stretch', hide_index=True)
         tabelas_finais[f"{nome_metrica} - Global"] = res_global
         
         # 2. Testes Pareados Post-Hoc (Gatilho A vs Gatilho B)
@@ -472,7 +472,7 @@ with tab_estatistica:
             })
             
         df_pareados = pd.DataFrame(resultados_pareados)
-        st.dataframe(df_pareados, use_container_width=True, hide_index=True)
+        st.dataframe(df_pareados, width='stretch', hide_index=True)
         tabelas_finais[f"{nome_metrica} - Pareada"] = df_pareados
         
         st.info("💡 **Nota Metodológica:** O Teste Global Qui-Quadrado aponta se no emaranhado geral há impacto comportamental. Embaixo, a Matriz Pareada cruza gatilho-a-gatilho usando o Teste Z aplicado com Correção de Bonferroni (mais robusto contra falsos positivos). Os tamanhos de efeito (Cramér's V e Cohen's h) demonstram se além de dar p-valor vencedor, a intensidade real também foi substancial.")
@@ -534,7 +534,7 @@ with tab_estatistica:
             return ['background-color: rgba(136, 86, 167, 0.2); font-weight: bold'] * len(row)
         return [''] * len(row)
     
-    st.dataframe(df_res_b.style.apply(highlight_intervencao, axis=1), use_container_width=True, hide_index=True)
+    st.dataframe(df_res_b.style.apply(highlight_intervencao, axis=1), width='stretch', hide_index=True)
     tabelas_finais["Cadastros Históricos (Geral)"] = df_res_b
     
     st.markdown("#### 🔬 Teste de Médias Estatísticas (Disparo vs Históricos)")
@@ -580,7 +580,7 @@ with tab_estatistica:
             })
             
         df_testes_b = pd.DataFrame(resultados_testes_b)
-        st.dataframe(df_testes_b, use_container_width=True, hide_index=True)
+        st.dataframe(df_testes_b, width='stretch', hide_index=True)
         tabelas_finais["Teste de Hipóteses (B)"] = df_testes_b
 
     st.divider()
@@ -603,7 +603,7 @@ with tab_estatistica:
         title="O Nível de Constância: Dispersão de Cadastros (Boxplot)", color_discrete_sequence=px.colors.qualitative.Prism
     )
     fig_b_box.update_layout(xaxis_title="", showlegend=False, xaxis=dict(tickangle=-20))
-    st.plotly_chart(fig_b_box, use_container_width=True)
+    st.plotly_chart(fig_b_box, width='stretch')
 
     st.divider()
 
@@ -697,11 +697,11 @@ with tab_estatistica:
     col_hm1, col_hm2 = st.columns(2)
     with col_hm1:
         fig_hm_cad = plot_calendar_heatmap(df_cadastros_unicos, 'data_cadastro_dt', 'Volume Geral Diário (Cadastros)', 'Purples')
-        st.plotly_chart(fig_hm_cad, use_container_width=True)
+        st.plotly_chart(fig_hm_cad, width='stretch')
     with col_hm2:
         if 'data_leitura_dt' in df_mensagens.columns:
             fig_hm_lei = plot_calendar_heatmap(df_mensagens, 'data_leitura_dt', 'Tracking de Interação (Mensagens Lidas)', 'Blues')
-            st.plotly_chart(fig_hm_lei, use_container_width=True)
+            st.plotly_chart(fig_hm_lei, width='stretch')
         else:
             st.warning("Data de leitura de mensagens não encontrada. O gráfico não pôde ser gerado.")
 
@@ -713,7 +713,7 @@ with tab_estatistica:
     
     with tab_hm:
         fig_hm_cad_sem = plot_weekday_heatmap(df_cadastros_unicos, 'data_cadastro_dt', 'Picos de Cadastro (Seg-Dom)', 'Greens')
-        st.plotly_chart(fig_hm_cad_sem, use_container_width=True)
+        st.plotly_chart(fig_hm_cad_sem, width='stretch')
         
     with tab_box:
         # Prepara a base agregada por dia exato para Boxplot real
@@ -739,7 +739,7 @@ with tab_estatistica:
             fig_bx.update_layout(xaxis_title="Meses", yaxis_title="Cadastros Realizados no Dia")
             
         fig_bx.update_layout(showlegend=False)
-        st.plotly_chart(fig_bx, use_container_width=True)
+        st.plotly_chart(fig_bx, width='stretch')
 
     with tab_bar:
         tipo_bar = st.radio("Selecione o Eixo Base para o Acumulado Total:", ["Dias da Semana (Seg-Dom)", "Meses do Ano (Jan-Dez)"], horizontal=True, key="rad_bar")
@@ -755,7 +755,7 @@ with tab_estatistica:
             
         fig_bar.update_traces(textposition='outside')
         fig_bar.update_layout(showlegend=False, yaxis=dict(range=[0, df_bar_plot['cadastros'].max() * 1.2]))
-        st.plotly_chart(fig_bar, use_container_width=True)
+        st.plotly_chart(fig_bar, width='stretch')
 
     st.divider()
 
@@ -777,5 +777,5 @@ with tab_estatistica:
             data=gerar_excel_estatistica_abc(tabelas_finais),
             file_name="matriz_estatistica_mensagens.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
+            width='stretch'
         )

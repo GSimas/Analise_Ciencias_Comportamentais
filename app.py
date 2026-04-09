@@ -302,6 +302,154 @@ def testar_hipotese(df, var_dependente, grupo_ref, grupo_teste):
 
     return tabela_resultados, d_val, texto
 
+METRICAS_PSICOSSOCIAIS = {
+    "Segurança Financeira (Q1-Q4)",
+    "Comportamento Financeiro (Q5-Q7)",
+    "Hábitos/Organização (Q8-Q10, Q12)",
+    "Confiança (Q13)"
+}
+
+def eh_metrica_psicossocial(nome_metrica):
+    return nome_metrica in METRICAS_PSICOSSOCIAIS
+
+def formatar_p_valor(p_val):
+    if pd.isna(p_val):
+        return "NaN"
+    return f"{p_val:.4e}" if p_val < 0.001 else f"{p_val:.4f}"
+
+def calcular_limites_iqr(serie):
+    serie = pd.Series(serie).dropna()
+    if serie.empty:
+        return np.nan, np.nan
+
+    q1 = serie.quantile(0.25)
+    q3 = serie.quantile(0.75)
+    iqr = q3 - q1
+
+    if pd.isna(iqr) or iqr == 0:
+        return serie.min(), serie.max()
+
+    return q1 - 1.5 * iqr, q3 + 1.5 * iqr
+
+def preparar_amostra_pareada(df_fonte, col_pre, col_pos, nome_metrica, tratamento_outlier):
+    df_pares = df_fonte.dropna(subset=[col_pre, col_pos]).copy()
+    n_geral = len(df_pares)
+
+    if n_geral == 0:
+        df_pares["_pre_ajustado"] = pd.Series(dtype=float)
+        df_pares["_pos_ajustado"] = pd.Series(dtype=float)
+        df_pares["_delta_ajustado"] = pd.Series(dtype=float)
+        return df_pares, n_geral, 0, False
+
+    df_pares["_pre_ajustado"] = df_pares[col_pre].astype(float)
+    df_pares["_pos_ajustado"] = df_pares[col_pos].astype(float)
+    df_pares["_delta_ajustado"] = df_pares["_pos_ajustado"] - df_pares["_pre_ajustado"]
+
+    aplica_tratamento = tratamento_outlier != "Sem tratamento" and eh_metrica_psicossocial(nome_metrica)
+    if not aplica_tratamento:
+        return df_pares, n_geral, n_geral, False
+
+    lim_inf, lim_sup = calcular_limites_iqr(df_pares["_delta_ajustado"])
+    if pd.isna(lim_inf) or pd.isna(lim_sup):
+        return df_pares, n_geral, n_geral, False
+
+    if tratamento_outlier == "Remover outliers (IQR)":
+        mascara = df_pares["_delta_ajustado"].between(lim_inf, lim_sup, inclusive="both")
+        df_pares = df_pares[mascara].copy()
+        return df_pares, n_geral, len(df_pares), True
+
+    if tratamento_outlier == "Winsorizar (IQR)":
+        df_pares["_delta_ajustado"] = df_pares["_delta_ajustado"].clip(lower=lim_inf, upper=lim_sup)
+        df_pares["_pos_ajustado"] = df_pares["_pre_ajustado"] + df_pares["_delta_ajustado"]
+        return df_pares, n_geral, len(df_pares), True
+
+    return df_pares, n_geral, n_geral, False
+
+def resumir_teste_pareado(df_pares_ajustado, n_geral, n_ajustado, grupo_label):
+    if n_ajustado <= 1:
+        return None
+
+    pre_vals = df_pares_ajustado["_pre_ajustado"]
+    pos_vals = df_pares_ajustado["_pos_ajustado"]
+    diff = df_pares_ajustado["_delta_ajustado"]
+
+    mean_diff = diff.mean()
+    std_diff = diff.std(ddof=1)
+    _, p_val = stats.ttest_rel(pos_vals, pre_vals)
+    d_cohen = mean_diff / std_diff if pd.notna(std_diff) and std_diff != 0 else 0
+
+    t_crit = stats.t.ppf(0.975, df=n_ajustado - 1)
+    margin_error = t_crit * (std_diff / np.sqrt(n_ajustado)) if pd.notna(std_diff) else np.nan
+
+    return {
+        "Grupo": grupo_label,
+        "N Geral": n_geral,
+        "N Ajustado": n_ajustado,
+        "Média (Pré)": pre_vals.mean(),
+        "Média (Pós)": pos_vals.mean(),
+        "Efeito (Δ)": mean_diff,
+        "Cohen's d": d_cohen,
+        "IC 95% Inferior": mean_diff - margin_error if pd.notna(margin_error) else np.nan,
+        "IC 95% Superior": mean_diff + margin_error if pd.notna(margin_error) else np.nan,
+        "P-Valor": formatar_p_valor(p_val)
+    }
+
+def resumir_teste_delta(df_g1, df_g2, n1_geral, n1_ajustado, n2_geral, n2_ajustado, g1, g2):
+    if n1_ajustado <= 1 or n2_ajustado <= 1:
+        return None
+
+    delta_g1 = df_g1["_delta_ajustado"]
+    delta_g2 = df_g2["_delta_ajustado"]
+
+    mean_d1, mean_d2 = delta_g1.mean(), delta_g2.mean()
+    std_d1, std_d2 = delta_g1.std(ddof=1), delta_g2.std(ddof=1)
+    diff_deltas = mean_d1 - mean_d2
+
+    _, p_val = stats.ttest_ind(delta_g1, delta_g2, equal_var=False)
+
+    s_pool = np.sqrt(
+        ((n1_ajustado - 1) * std_d1**2 + (n2_ajustado - 1) * std_d2**2) / (n1_ajustado + n2_ajustado - 2)
+    ) if (n1_ajustado + n2_ajustado - 2) > 0 else 0
+    d_cohen_delta = diff_deltas / s_pool if s_pool != 0 else 0
+
+    v1, v2 = (std_d1**2) / n1_ajustado, (std_d2**2) / n2_ajustado
+    se_diff = np.sqrt(v1 + v2)
+    den_welch = (v1**2 / (n1_ajustado - 1)) + (v2**2 / (n2_ajustado - 1))
+
+    if se_diff > 0 and den_welch > 0:
+        df_welch = ((v1 + v2)**2) / den_welch
+        t_crit = stats.t.ppf(0.975, df=df_welch)
+        margin_error = t_crit * se_diff
+        ci_lower = diff_deltas - margin_error
+        ci_upper = diff_deltas + margin_error
+    else:
+        ci_lower, ci_upper = 0, 0
+
+    if pd.isna(p_val):
+        parecer_teste = "Indeterminado"
+    elif p_val < 0.05:
+        parecer_teste = "✅ Significativo (Superou)"
+    elif p_val < 0.10:
+        parecer_teste = "⚠️ Marginalmente Significativo"
+    else:
+        parecer_teste = "❌ Desempenho Equivalente"
+
+    return {
+        "Comparação": f"{g1} vs {g2}",
+        f"N Geral ({g1[:10]})": n1_geral,
+        f"N Ajustado ({g1[:10]})": n1_ajustado,
+        f"N Geral ({g2[:10]})": n2_geral,
+        f"N Ajustado ({g2[:10]})": n2_ajustado,
+        f"Δ Médio ({g1[:10]})": mean_d1,
+        f"Δ Médio ({g2[:10]})": mean_d2,
+        "Diferença de Efeitos (ΔΔ)": diff_deltas,
+        "Cohen's d (ΔΔ)": d_cohen_delta,
+        "IC 95% Inf (ΔΔ)": ci_lower,
+        "IC 95% Sup (ΔΔ)": ci_upper,
+        "P-Valor (ΔΔ)": formatar_p_valor(p_val),
+        "Parecer do Teste ΔΔ": parecer_teste
+    }
+
 # --- CORES PADRÃO ---
 CORES_GRUPOS = {
     "G0 (Controle)": "#E0E0E0", "G1 (Formal)": "#B3CDE3", 
@@ -480,7 +628,7 @@ if df_bruto is not None:
             }
 
             st.subheader(f"Tabela Resumo: {metrica_selecionada}")
-            st.dataframe(resumo_estatistico.style.format(format_dict), use_container_width=True)
+            st.dataframe(resumo_estatistico.style.format(format_dict), width='stretch')
 
             # 5. Explicação dos resultados da Aba 0
             st.info(f"""
@@ -503,7 +651,7 @@ if df_bruto is not None:
             fig_bar_desc.update_layout(showlegend=False)
             if is_taxa:
                 fig_bar_desc.update_layout(yaxis_tickformat='.0%')
-            st.plotly_chart(fig_bar_desc, use_container_width=True)
+            st.plotly_chart(fig_bar_desc, width='stretch')
 
         # --- ABA 1: BALANCEAMENTO ---
         with tab1:
@@ -540,7 +688,7 @@ if df_bruto is not None:
                                 color_discrete_map=CORES_GRUPOS, points="all",
                                 title="Impacto das Intervenções na Criação de Hábito Financeiro")
             fig_adesao.update_layout(yaxis_tickformat='.0%', showlegend=False)
-            st.plotly_chart(fig_adesao, use_container_width=True)
+            st.plotly_chart(fig_adesao, width='stretch')
 
             st.subheader("Testes Estatísticos")
             
@@ -562,7 +710,7 @@ if df_bruto is not None:
                     't': '{:.2f}', 
                     'P>|t|': lambda x: f"{x:.2e}" if x < 0.001 else f"{x:.4f}",
                     '[0.025': '{:.4f}', '0.975]': '{:.4f}'
-                }), use_container_width=True)
+                }), width='stretch')
             with col_b:
                 st.metric("Tamanho do Efeito (Cohen's d)", f"{d_cohen:.3f}" if pd.notna(d_cohen) else "N/A")
 
@@ -587,7 +735,7 @@ if df_bruto is not None:
                              color_discrete_map=CORES_GRUPOS, points="all",
                              title=f"Impacto na {tipo_analise}")
             fig_sep.update_layout(yaxis_tickformat='.0%', showlegend=False)
-            st.plotly_chart(fig_sep, use_container_width=True)
+            st.plotly_chart(fig_sep, width='stretch')
 
             h_sel_sep = st.selectbox("Selecione a Hipótese para analisar:", list(hipoteses.keys()), key='sel_hipotese_aba3')
             ref_sep, teste_sep = hipoteses[h_sel_sep]
@@ -605,7 +753,7 @@ if df_bruto is not None:
                     'Coef.': '{:.4f}', 'Std.Err.': '{:.4f}', 't': '{:.2f}', 
                     'P>|t|': lambda x: f"{x:.2e}" if x < 0.001 else f"{x:.4f}",
                     '[0.025': '{:.4f}', '0.975]': '{:.4f}'
-                }), use_container_width=True)   
+                }), width='stretch')   
                 
             with col_d:
                 st.metric("Tamanho do Efeito (Cohen's d)", f"{d_cohen_sep:.3f}" if pd.notna(d_cohen_sep) else "N/A")
@@ -690,7 +838,7 @@ if df_bruto is not None:
             if "Taxa" in y_lab: fig_3d.update_layout(scene=dict(yaxis=dict(tickformat=".0%")))
             if "Taxa" in z_lab: fig_3d.update_layout(scene=dict(zaxis=dict(tickformat=".0%")))
 
-            st.plotly_chart(fig_3d, use_container_width=True)
+            st.plotly_chart(fig_3d, width='stretch')
             
             st.success(f"📌 Total de empreendedoras únicas plotadas: {len(df)}")
 
@@ -746,7 +894,7 @@ if df_bruto is not None:
                 )
 
                 fig_heat.update_layout(margin=dict(l=0, r=0, b=0, t=40))
-                st.plotly_chart(fig_heat, use_container_width=True)
+                st.plotly_chart(fig_heat, width='stretch')
 
                 with st.expander("🔍 Interpretando as Correlações"):
                     st.markdown("""
@@ -825,7 +973,7 @@ if df_bruto is not None:
             if "Taxa" in metrica_sel:
                 fig_seg.update_layout(yaxis_tickformat='.0%')
             
-            st.plotly_chart(fig_seg, use_container_width=True)
+            st.plotly_chart(fig_seg, width='stretch')
 
             with st.expander("💡 Como interpretar esta análise?"):
                 st.markdown(f"""
@@ -913,7 +1061,7 @@ if df_bruto is not None:
                 # Ajuste para mostrar todas as semanas no eixo X
                 fig_t.update_xaxes(dtick=1)
                 
-                st.plotly_chart(fig_t, use_container_width=True)
+                st.plotly_chart(fig_t, width='stretch')
                 
 
             else:
@@ -933,7 +1081,7 @@ if df_bruto is not None:
                 fig_eco.add_trace(go.Bar(x=resumo_eco['grupo_comparacao'], y=resumo_eco['quantidade_de_transacoes'], name="Transações", marker_color="#B3CDE3"))
                 fig_eco.add_trace(go.Bar(x=resumo_eco['grupo_comparacao'], y=resumo_eco['painel_aj_5x'], name="Uso Painel (Ajustado 5x)", marker_color="#8856A7"))
                 fig_eco.update_layout(barmode='group', title="Média de Ações por Usuária", margin=dict(t=40, b=0))
-                st.plotly_chart(fig_eco, use_container_width=True)
+                st.plotly_chart(fig_eco, width='stretch')
 
             with col_eco2:
                 st.subheader("🎯 Taxa de Conversão Real")
@@ -945,7 +1093,7 @@ if df_bruto is not None:
                 fig_conv.add_trace(go.Bar(x=resumo_conv['grupo_comparacao'], y=resumo_conv['fez_algo'], name="Transações", marker_color="#B3CDE3"))
                 fig_conv.add_trace(go.Bar(x=resumo_conv['grupo_comparacao'], y=resumo_conv['viu_algo'], name="Painel", marker_color="#8856A7"))
                 fig_conv.update_layout(barmode='group', yaxis_tickformat='.0%', title="% da Base que Adotou", margin=dict(t=40, b=0))
-                st.plotly_chart(fig_conv, use_container_width=True)
+                st.plotly_chart(fig_conv, width='stretch')
 
         # --- ABA 5: INVESTIGAÇÃO TOM DE VOZ ---
         with tab5:
@@ -969,7 +1117,7 @@ if df_bruto is not None:
                 st.dataframe(tabela_voz.style.format({
                     'Coef.': '{:.4f}', 'Std.Err.': '{:.4f}', 't': '{:.2f}',
                     'P>|t|': lambda x: f"{x:.2e}" if x < 0.001 else f"{x:.4f}"
-                }), use_container_width=True)
+                }), width='stretch')
             with col_v2:
                 st.metric("Cohen's d", f"{d_voz:.3f}" if pd.notna(d_voz) else "N/A")
                 
@@ -1078,7 +1226,7 @@ if df_bruto is not None:
                 df_desc = df_desc.round(2)
                 
                 with st.expander("Ver Tabela Completa de Estatísticas"):
-                    st.dataframe(df_desc, use_container_width=True)
+                    st.dataframe(df_desc, width='stretch')
             else:
                 st.info("Colunas numéricas não encontradas para gerar estatísticas.")
 
@@ -1206,7 +1354,7 @@ if df_bruto is not None:
             else:
                 fig_lab.update_yaxes(title_text=f"Valor ({agg_func})")
 
-            st.plotly_chart(fig_lab, use_container_width=True)
+            st.plotly_chart(fig_lab, width='stretch')
             
             if eixo_x_tipo == "Por Grupos":
                 for met_sel in metricas_selecionadas:
@@ -1242,7 +1390,7 @@ if df_bruto is not None:
             grupos_disponiveis = df_plot['grupo_comparacao'].dropna().unique().tolist()
             
             @st.cache_data
-            def gerar_excel_pareado(_df_fonte, _dicionario_opcoes, lista_grupos):
+            def gerar_excel_pareado(_df_fonte, _dicionario_opcoes, lista_grupos, tratamento_outlier):
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     combinacoes_todas = list(itertools.combinations(lista_grupos, 2))
@@ -1250,34 +1398,15 @@ if df_bruto is not None:
                         linhas_metrica = []
                         for g1, g2 in combinacoes_todas:
                             for gp in [g1, g2]:
-                                df_gp = _df_fonte[_df_fonte['grupo_comparacao'] == gp].dropna(subset=[col_i, col_f])
-                                n_pares = len(df_gp)
-                                if n_pares > 1:
-                                    pre_vals = df_gp[col_i]
-                                    pos_vals = df_gp[col_f]
-                                    
-                                    diff = pos_vals - pre_vals
-                                    mean_diff = diff.mean()
-                                    std_diff = diff.std(ddof=1)
-                                    
-                                    t_stat, p_val = stats.ttest_rel(pos_vals, pre_vals)
-                                    d_cohen = mean_diff / std_diff if std_diff != 0 else 0
-                                    
-                                    t_crit = stats.t.ppf(0.975, df=n_pares-1)
-                                    margin_error = t_crit * (std_diff / np.sqrt(n_pares))
-                                    
-                                    linhas_metrica.append({
-                                        "Comparação": f"{g1} vs {g2}",
-                                        "Grupo": gp,
-                                        "N (Pares)": n_pares,
-                                        "Média (Pré)": pre_vals.mean(),
-                                        "Média (Pós)": pos_vals.mean(),
-                                        "Efeito (Δ)": mean_diff,
-                                        "Cohen's d": d_cohen,
-                                        "IC 95% Inferior": mean_diff - margin_error,
-                                        "IC 95% Superior": mean_diff + margin_error,
-                                        "P-Valor": p_val
-                                    })
+                                df_gp_base = _df_fonte[_df_fonte['grupo_comparacao'] == gp]
+                                df_gp, n_geral, n_ajustado, houve_ajuste = preparar_amostra_pareada(
+                                    df_gp_base, col_i, col_f, metrica, tratamento_outlier
+                                )
+                                resumo = resumir_teste_pareado(df_gp, n_geral, n_ajustado, gp)
+                                if resumo:
+                                    resumo["Comparação"] = f"{g1} vs {g2}"
+                                    resumo["Tratamento de Outliers"] = tratamento_outlier if houve_ajuste else "Sem tratamento"
+                                    linhas_metrica.append(resumo)
                         if linhas_metrica:
                             df_out = pd.DataFrame(linhas_metrica)
                             # Trata caracteres não aceitos pelo Excel e limita a 31 caracteres
@@ -1285,20 +1414,30 @@ if df_bruto is not None:
                             df_out.to_excel(writer, sheet_name=sheet_name, index=False)
                 return output.getvalue()
 
-            col_met1, col_met2 = st.columns([3, 1])
+            col_met1, col_met2, col_met3 = st.columns([2.2, 1.6, 1.2])
             with col_met1:
                 metrica_teste = st.selectbox("Selecione a métrica para o Teste Pareado:", list(opcoes_stats.keys()), key="sel_stat_pareado")
                 c_ini, c_fin = opcoes_stats[metrica_teste]
             with col_met2:
+                tratamento_outlier = st.selectbox(
+                    "Tratamento de outliers:",
+                    ["Winsorizar (IQR)", "Remover outliers (IQR)", "Sem tratamento"],
+                    key="sel_outlier_pareado"
+                )
+                if not eh_metrica_psicossocial(metrica_teste):
+                    st.caption("Para questões avulsas e nota geral, a análise segue sem ajuste.")
+                else:
+                    st.caption("O ajuste é calculado sobre os deltas individuais (Pós - Pré) dentro de cada grupo.")
+            with col_met3:
                 st.write("")
                 st.write("")
-                excel_bytes = gerar_excel_pareado(df_plot, opcoes_stats, grupos_disponiveis)
+                excel_bytes = gerar_excel_pareado(df_plot, opcoes_stats, grupos_disponiveis, tratamento_outlier)
                 st.download_button(
                     label="📥 Exportar Todas (Excel)",
                     data=excel_bytes,
                     file_name="estatisticas_pareadas_completa.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
+                    width='stretch'
                 )
 
             # Gera todas as combinações paramétricas para a interface em tela
@@ -1312,43 +1451,19 @@ if df_bruto is not None:
                     resultados_stats = []
                     
                     for g in [g1, g2]:
-                        df_g = df_plot[df_plot['grupo_comparacao'] == g].dropna(subset=[c_ini, c_fin])
-                        n_pares = len(df_g)
-                        if n_pares > 1:
-                            pre_vals = df_g[c_ini]
-                            pos_vals = df_g[c_fin]
-                            
-                            diff = pos_vals - pre_vals
-                            mean_diff = diff.mean()
-                            std_diff = diff.std(ddof=1)
-                            
-                            t_stat, p_val = stats.ttest_rel(pos_vals, pre_vals)
-                            p_val_display = f"{p_val:.4e}" if pd.notna(p_val) and p_val < 0.001 else (f"{p_val:.4f}" if pd.notna(p_val) else "NaN")
-                            
-                            d_cohen = mean_diff / std_diff if std_diff != 0 else 0
-                            
-                            t_crit = stats.t.ppf(0.975, df=n_pares-1)
-                            margin_error = t_crit * (std_diff / np.sqrt(n_pares))
-                            ci_lower = mean_diff - margin_error
-                            ci_upper = mean_diff + margin_error
-                            
-                            resultados_stats.append({
-                                "Grupo": g,
-                                "N (Pares)": n_pares,
-                                "Média (Pré)": pre_vals.mean(),
-                                "Média (Pós)": pos_vals.mean(),
-                                "Efeito (Δ)": mean_diff,
-                                "Cohen's d": d_cohen,
-                                "IC 95% Inferior": ci_lower,
-                                "IC 95% Superior": ci_upper,
-                                "P-Valor": p_val_display
-                            })
+                        df_g_base = df_plot[df_plot['grupo_comparacao'] == g]
+                        df_g, n_geral, n_ajustado, _ = preparar_amostra_pareada(
+                            df_g_base, c_ini, c_fin, metrica_teste, tratamento_outlier
+                        )
+                        resumo = resumir_teste_pareado(df_g, n_geral, n_ajustado, g)
+                        if resumo:
+                            resultados_stats.append(resumo)
     
                     if resultados_stats:
                         df_stats_pareado = pd.DataFrame(resultados_stats)
                         st.dataframe(
                             df_stats_pareado,
-                            use_container_width=True,
+                            width='stretch',
                             hide_index=True,
                             column_config={
                                 "Média (Pré)": st.column_config.NumberColumn(format="%.2f"),
@@ -1370,70 +1485,26 @@ if df_bruto is not None:
                 for g1, g2 in combinacoes:
                     st.markdown(f"**Teste de Deltas: {g1} vs {g2}**")
                     
-                    df_g1 = df_plot[df_plot['grupo_comparacao'] == g1].dropna(subset=[c_ini, c_fin])
-                    df_g2 = df_plot[df_plot['grupo_comparacao'] == g2].dropna(subset=[c_ini, c_fin])
-                    
-                    n1, n2 = len(df_g1), len(df_g2)
-                    
-                    if n1 > 1 and n2 > 1:
-                        # Extrai puramente os deltas (Diferença) pessoa por pessoa
-                        delta_g1 = df_g1[c_fin] - df_g1[c_ini]
-                        delta_g2 = df_g2[c_fin] - df_g2[c_ini]
-                        
-                        mean_d1, mean_d2 = delta_g1.mean(), delta_g2.mean()
-                        std_d1, std_d2 = delta_g1.std(ddof=1), delta_g2.std(ddof=1)
-                        
-                        diff_deltas = mean_d1 - mean_d2
-                        
-                        # Teste-T Não-Pareado (Independente) testando se a Diferença é = 0, aceitando variâncias marginais diferentes (equal_var=False)
-                        t_stat, p_val = stats.ttest_ind(delta_g1, delta_g2, equal_var=False)
-                        p_val_display = f"{p_val:.4e}" if pd.notna(p_val) and p_val < 0.001 else (f"{p_val:.4f}" if pd.notna(p_val) else "NaN")
-                        
-                        # Cohen's d cruzado de variâncias conjuntas amostrais
-                        s_pool = np.sqrt(((n1 - 1) * std_d1**2 + (n2 - 1) * std_d2**2) / (n1 + n2 - 2)) if (n1 + n2 - 2) > 0 else 0
-                        d_cohen_delta = diff_deltas / s_pool if s_pool != 0 else 0
-                        
-                        # IC 95% do Efeito (Welch-Satterthwaite)
-                        v1, v2 = (std_d1**2) / n1, (std_d2**2) / n2
-                        se_diff = np.sqrt(v1 + v2)
-                        
-                        # Grau de liberdade de Welch para IC
-                        den_welch = (v1**2 / (n1 - 1)) + (v2**2 / (n2 - 1))
-                        if se_diff > 0 and den_welch > 0:
-                            df_welch = ((v1 + v2)**2) / den_welch
-                            t_crit = stats.t.ppf(0.975, df=df_welch)
-                            margin_error = t_crit * se_diff
-                            ci_lower = diff_deltas - margin_error
-                            ci_upper = diff_deltas + margin_error
-                        else:
-                            ci_lower, ci_upper = 0, 0
-                        
-                        if pd.isna(p_val):
-                            parecer_teste = "Indeterminado"
-                        elif p_val < 0.05:
-                            parecer_teste = "✅ Significativo (Superou)"
-                        elif p_val < 0.10:
-                            parecer_teste = "⚠️ Marginalmente Significativo"
-                        else:
-                            parecer_teste = "❌ Desempenho Equivalente"
-                            
-                        resultado_delta = [{
-                            "Comparação": f"{g1} vs {g2}",
-                            f"Δ Médio ({g1[:10]})": mean_d1,
-                            f"Δ Médio ({g2[:10]})": mean_d2,
-                            "Diferença de Efeitos (ΔΔ)": diff_deltas,
-                            "Cohen's d (ΔΔ)": d_cohen_delta,
-                            "IC 95% Inf (ΔΔ)": ci_lower,
-                            "IC 95% Sup (ΔΔ)": ci_upper,
-                            "P-Valor (ΔΔ)": p_val_display,
-                            "Parecer do Teste ΔΔ": parecer_teste
-                        }]
-                        
-                        df_res_deltas = pd.DataFrame(resultado_delta)
+                    df_g1_base = df_plot[df_plot['grupo_comparacao'] == g1]
+                    df_g2_base = df_plot[df_plot['grupo_comparacao'] == g2]
+
+                    df_g1, n1_geral, n1_ajustado, _ = preparar_amostra_pareada(
+                        df_g1_base, c_ini, c_fin, metrica_teste, tratamento_outlier
+                    )
+                    df_g2, n2_geral, n2_ajustado, _ = preparar_amostra_pareada(
+                        df_g2_base, c_ini, c_fin, metrica_teste, tratamento_outlier
+                    )
+
+                    resultado_delta = resumir_teste_delta(
+                        df_g1, df_g2, n1_geral, n1_ajustado, n2_geral, n2_ajustado, g1, g2
+                    )
+
+                    if resultado_delta:
+                        df_res_deltas = pd.DataFrame([resultado_delta])
                         
                         st.dataframe(
                             df_res_deltas,
-                            use_container_width=True,
+                            width='stretch',
                             hide_index=True,
                             column_config={
                                 f"Δ Médio ({g1[:10]})": st.column_config.NumberColumn(format="%+.2f"),
@@ -1494,7 +1565,7 @@ if df_bruto is not None:
                 )
                 fig_box.update_layout(yaxis_title="Valor / Nota", xaxis_title="")
                 fig_box.update_traces(marker=dict(size=4, opacity=0.6, line=dict(width=0)))
-                st.plotly_chart(fig_box, use_container_width=True)
+                st.plotly_chart(fig_box, width='stretch')
                 
             else: # Por Questões (Eixo Y Duplo)
                 grupos_disp = ["Todos os Grupos"] + list(df_melt_all['grupo_comparacao'].dropna().unique())
@@ -1530,7 +1601,7 @@ if df_bruto is not None:
                 fig_box.update_layout(boxmode='group', title=f"Dispersão de Todas as Questões ({grupo_sel})", xaxis=dict(categoryorder='array', categoryarray=ordem_x))
                 fig_box.update_yaxes(title_text="Valores (Q1 a Q13)", secondary_y=False)
                 fig_box.update_yaxes(title_text="Nota Geral", secondary_y=True, showgrid=False)
-                st.plotly_chart(fig_box, use_container_width=True)
+                st.plotly_chart(fig_box, width='stretch')
 
             # --- B. GRÁFICO DE RADAR ---
             st.markdown("#### 🕸️ Mapa de Autoconfiança (Gráfico de Radar)")
@@ -1608,7 +1679,7 @@ if df_bruto is not None:
                             title=dict(text=g, font=dict(size=14)),
                             margin=dict(l=30, r=30, t=50, b=20)
                         )
-                        st.plotly_chart(fig_radar, use_container_width=True)
+                        st.plotly_chart(fig_radar, width='stretch')
                     else:
                         st.warning(f"Faltam colunas numéricas no grupo {g}")
             
@@ -1691,7 +1762,7 @@ if df_bruto is not None:
                     height=500
                 )
                 
-                st.plotly_chart(fig_sankey, use_container_width=True)
+                st.plotly_chart(fig_sankey, width='stretch')
             else:
                 st.warning("Não há respostas válidas pareadas para esta questão no grupo selecionado.")
 
@@ -1763,7 +1834,7 @@ if df_bruto is not None:
                         )
                         fig_f.update_traces(textposition='inside', textinfo='percent+label')
 
-                    st.plotly_chart(fig_f, use_container_width=True)
+                    st.plotly_chart(fig_f, width='stretch')
                 else:
                     st.warning("Não há respostas válidas registradas para esta pergunta no grupo selecionado.")
 
@@ -1920,7 +1991,7 @@ if df_bruto is not None:
                         )
                         fig_m.update_traces(textposition='inside', textinfo='percent+label')
 
-                    st.plotly_chart(fig_m, use_container_width=True)
+                    st.plotly_chart(fig_m, width='stretch')
                 else:
                     st.warning("Não há respostas válidas registradas para esta pergunta no grupo selecionado.")
 
