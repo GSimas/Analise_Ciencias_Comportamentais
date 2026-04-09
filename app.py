@@ -1304,73 +1304,130 @@ if df_bruto is not None:
             # Gera todas as combinações paramétricas para a interface em tela
             combinacoes = list(itertools.combinations(grupos_disponiveis, 2))
             
-            for g1, g2 in combinacoes:
-                st.markdown(f"**Comparação: {g1} vs {g2}**")
-                resultados_stats = []
-                
-                for g in [g1, g2]:
-                    # 3. Filtra o grupo e remove quem não tem o par completo usando as chaves seguras (c_ini, c_fin)
-                    df_g = df_plot[df_plot['grupo_comparacao'] == g].dropna(subset=[c_ini, c_fin])
+            tab_prepos, tab_deltas = st.tabs(["📊 Pré vs Pós (Por Grupo)", "⚖️ Comparação de Deltas (ΔΔ) entre Grupos"])
+            
+            with tab_prepos:
+                for g1, g2 in combinacoes:
+                    st.markdown(f"**Comparação: {g1} vs {g2}**")
+                    resultados_stats = []
                     
-                    n_pares = len(df_g)
-                    
-                    # Só calcula se houver amostra suficiente para variância (n > 1)
-                    if n_pares > 1:
-                        pre_vals = df_g[c_ini]
-                        pos_vals = df_g[c_fin]
-                        
-                        # Cálculos da Diferença
-                        diff = pos_vals - pre_vals
-                        mean_diff = diff.mean()
-                        std_diff = diff.std(ddof=1)
-                        se_diff = std_diff / np.sqrt(n_pares)
-                        
-                        # Teste t pareado
-                        t_stat, p_val = stats.ttest_rel(pos_vals, pre_vals)
+                    for g in [g1, g2]:
+                        df_g = df_plot[df_plot['grupo_comparacao'] == g].dropna(subset=[c_ini, c_fin])
+                        n_pares = len(df_g)
+                        if n_pares > 1:
+                            pre_vals = df_g[c_ini]
+                            pos_vals = df_g[c_fin]
+                            
+                            diff = pos_vals - pre_vals
+                            mean_diff = diff.mean()
+                            std_diff = diff.std(ddof=1)
+                            
+                            t_stat, p_val = stats.ttest_rel(pos_vals, pre_vals)
+                            p_val_display = f"{p_val:.4e}" if p_val < 0.001 else p_val
+                            
+                            d_cohen = mean_diff / std_diff if std_diff != 0 else 0
+                            
+                            t_crit = stats.t.ppf(0.975, df=n_pares-1)
+                            margin_error = t_crit * (std_diff / np.sqrt(n_pares))
+                            ci_lower = mean_diff - margin_error
+                            ci_upper = mean_diff + margin_error
+                            
+                            resultados_stats.append({
+                                "Grupo": g,
+                                "N (Pares)": n_pares,
+                                "Média (Pré)": pre_vals.mean(),
+                                "Média (Pós)": pos_vals.mean(),
+                                "Efeito (Δ)": mean_diff,
+                                "Cohen's d": d_cohen,
+                                "IC 95% Inferior": ci_lower,
+                                "IC 95% Superior": ci_upper,
+                                "P-Valor": p_val_display
+                            })
+    
+                    if resultados_stats:
+                        df_stats_pareado = pd.DataFrame(resultados_stats)
+                        st.dataframe(
+                            df_stats_pareado,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "Média (Pré)": st.column_config.NumberColumn(format="%.2f"),
+                                "Média (Pós)": st.column_config.NumberColumn(format="%.2f"),
+                                "Efeito (Δ)": st.column_config.NumberColumn(format="%+.2f"),
+                                "Cohen's d": st.column_config.NumberColumn(format="%+.3f"),
+                                "IC 95% Inferior": st.column_config.NumberColumn(format="%.2f"),
+                                "IC 95% Superior": st.column_config.NumberColumn(format="%.2f"),
+                                "P-Valor": st.column_config.TextColumn("P-Valor")
+                            }
+                        )
+                    else:
+                        st.warning(f"Não há dados pareados suficientes (Pré e Pós) para calcular a estatística entre {g1} e {g2}.")
 
+            with tab_deltas:
+                st.markdown("### Diferença de Mudança Entre Grupos (ΔΔ)")
+                st.info("Avalia de forma cruzada se a \"melhora\" (Efeito Pós-Pré) obtida por um grupo superou cientificamente a de outro (Teste t de Welch para amostras independentes de Deltas da Métrica Selecionada acima).")
+                
+                for g1, g2 in combinacoes:
+                    st.markdown(f"**Teste de Deltas: {g1} vs {g2}**")
+                    
+                    df_g1 = df_plot[df_plot['grupo_comparacao'] == g1].dropna(subset=[c_ini, c_fin])
+                    df_g2 = df_plot[df_plot['grupo_comparacao'] == g2].dropna(subset=[c_ini, c_fin])
+                    
+                    n1, n2 = len(df_g1), len(df_g2)
+                    
+                    if n1 > 1 and n2 > 1:
+                        # Extrai puramente os deltas (Diferença) pessoa por pessoa
+                        delta_g1 = df_g1[c_fin] - df_g1[c_ini]
+                        delta_g2 = df_g2[c_fin] - df_g2[c_ini]
+                        
+                        mean_d1, mean_d2 = delta_g1.mean(), delta_g2.mean()
+                        std_d1, std_d2 = delta_g1.std(ddof=1), delta_g2.std(ddof=1)
+                        
+                        diff_deltas = mean_d1 - mean_d2
+                        
+                        # Teste-T Não-Pareado (Independente) testando se a Diferença é = 0, aceitando variâncias marginais diferentes (equal_var=False)
+                        t_stat, p_val = stats.ttest_ind(delta_g1, delta_g2, equal_var=False)
                         p_val_display = f"{p_val:.4e}" if p_val < 0.001 else p_val
                         
-                        # Tamanho do Efeito (Cohen's d)
-                        d_cohen = mean_diff / std_diff if std_diff != 0 else 0
-
-                        # Intervalo de Confiança (95%)
-                        t_crit = stats.t.ppf(0.975, df=n_pares-1)
-                        margin_error = t_crit * (std_diff / np.sqrt(n_pares))
-                        ci_lower = mean_diff - margin_error
-                        ci_upper = mean_diff + margin_error
+                        # Cohen's d cruzado de variâncias conjuntas amostrais
+                        s_pool = np.sqrt(((n1 - 1) * std_d1**2 + (n2 - 1) * std_d2**2) / (n1 + n2 - 2)) if (n1 + n2 - 2) > 0 else 0
+                        d_cohen_delta = diff_deltas / s_pool if s_pool != 0 else 0
                         
-                        resultados_stats.append({
-                            "Grupo": g,
-                            "N (Pares)": n_pares,
-                            "Média (Pré)": pre_vals.mean(),
-                            "Média (Pós)": pos_vals.mean(),
-                            "Efeito (Δ)": mean_diff,
-                            "Cohen's d": d_cohen,
-                            "IC 95% Inferior": ci_lower,
-                            "IC 95% Superior": ci_upper,
-                            "P-Valor": p_val_display
-                        })
-
-                # Exibição da Tabela para cada combinação
-                if resultados_stats:
-                    df_stats_pareado = pd.DataFrame(resultados_stats)
-                    
-                    st.dataframe(
-                        df_stats_pareado,
-                        use_container_width=True,
-                        hide_index=True,
-                        column_config={
-                            "Média (Pré)": st.column_config.NumberColumn(format="%.2f"),
-                            "Média (Pós)": st.column_config.NumberColumn(format="%.2f"),
-                            "Efeito (Δ)": st.column_config.NumberColumn(format="%+.2f"),
-                            "Cohen's d": st.column_config.NumberColumn(format="%+.3f"),
-                            "IC 95% Inferior": st.column_config.NumberColumn(format="%.2f"),
-                            "IC 95% Superior": st.column_config.NumberColumn(format="%.2f"),
-                            "P-Valor": st.column_config.TextColumn("P-Valor")
-                        }
-                    )
-                else:
-                    st.warning(f"Não há dados pareados suficientes (Pré e Pós) para calcular a estatística entre {g1} e {g2}.")
+                        if pd.isna(p_val):
+                            parecer_teste = "Indeterminado"
+                        elif p_val < 0.05:
+                            parecer_teste = "✅ Significativo (Superou)"
+                        elif p_val < 0.10:
+                            parecer_teste = "⚠️ Marginalmente Significativo"
+                        else:
+                            parecer_teste = "❌ Desempenho Equivalente"
+                            
+                        resultado_delta = [{
+                            "Comparação": f"{g1} vs {g2}",
+                            f"Δ Médio ({g1[:10]})": mean_d1,
+                            f"Δ Médio ({g2[:10]})": mean_d2,
+                            "Diferença de Efeitos (ΔΔ)": diff_deltas,
+                            "Cohen's d (ΔΔ)": d_cohen_delta,
+                            "P-Valor (ΔΔ)": p_val_display,
+                            "Parecer do Teste ΔΔ": parecer_teste
+                        }]
+                        
+                        df_res_deltas = pd.DataFrame(resultado_delta)
+                        
+                        st.dataframe(
+                            df_res_deltas,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                f"Δ Médio ({g1[:10]})": st.column_config.NumberColumn(format="%+.2f"),
+                                f"Δ Médio ({g2[:10]})": st.column_config.NumberColumn(format="%+.2f"),
+                                "Diferença de Efeitos (ΔΔ)": st.column_config.NumberColumn(format="%+.2f"),
+                                "Cohen's d (ΔΔ)": st.column_config.NumberColumn(format="%+.3f"),
+                                "P-Valor (ΔΔ)": st.column_config.TextColumn("P-Valor")
+                            }
+                        )
+                    else:
+                        st.warning(f"Não há amostras emparelhadas o bastante para deduzir cruzamento de Deltas entre {g1} e {g2}.")
 
             st.divider()
 

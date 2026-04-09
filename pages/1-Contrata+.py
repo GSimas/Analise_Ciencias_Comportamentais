@@ -428,7 +428,7 @@ with tab_estatistica:
             "Teste Global": "Qui-Quadrado (Independência)",
             "Estatística (X²)": f"{chi2:.3f}" if pd.notna(chi2) else "-",
             "P-Valor": format_p_valor(p_val_g),
-            "Significância": "✅ Há diferença genuína (p < 0.05)" if pd.notna(p_val_g) and p_val_g < 0.05 else "❌ Grupos Não Diferem Estruturalmente",
+            "Significância": "✅ Há diferença genuína (p < 0.05)" if (pd.notna(p_val_g) and p_val_g < 0.05) else ("⚠️ Tendência Marginal (p < 0.10)" if (pd.notna(p_val_g) and p_val_g < 0.10) else "❌ Sem Evidência de Diferença"),
             "Efeito da Intervenção (Cramér's V)": f"{v_cramer:.3f}" if pd.notna(v_cramer) else "-"
         }])
         
@@ -447,9 +447,18 @@ with tab_estatistica:
             
             # Correção de Bonferroni (Tornar o teste mais robusto para múltiplas comparações simultâneas e não cometer Falso Positivo)
             alfa_bonf = 0.05 / len(combinacoes) if len(combinacoes) > 0 else 0.05
+            alfa_bonf_marg = 0.10 / len(combinacoes) if len(combinacoes) > 0 else 0.10
             
-            sig = f"✅ (p < {alfa_bonf:.4f})" if pd.notna(p_val_par) and p_val_par < alfa_bonf else "❌"
-            vencedor = gA if diff > 0 and '✅' in sig else (gB if diff < 0 and '✅' in sig else "Empate Técnico")
+            if pd.isna(p_val_par):
+                sig = "Indeterminado"
+            elif p_val_par < alfa_bonf:
+                sig = f"✅ (p < {alfa_bonf:.4f})"
+            elif p_val_par < alfa_bonf_marg:
+                sig = f"⚠️ Marginal (p < {alfa_bonf_marg:.4f})"
+            else:
+                sig = "❌"
+            
+            vencedor = gA if diff > 0 and ('✅' in sig or '⚠️' in sig) else (gB if diff < 0 and ('✅' in sig or '⚠️' in sig) else "Empate Técnico")
             
             resultados_pareados.append({
                 "Confronto Pareado": f"{gA} vs {gB}",
@@ -566,7 +575,7 @@ with tab_estatistica:
                 "Desempenho do Orgânico": f"≈ {mean_base:.2f} cads/dia",
                 "Efeito Bruto (Δ)": f"{diff_medias:+.2f} cads",
                 "P-Valor": format_p_valor(p_val),
-                "Parecer Teste-t": "✅ Diferença Científica" if (pd.notna(p_val) and p_val < 0.05) else "❌ Estatisticamente Igual",
+                "Parecer Teste-t": "✅ Diferença Científica" if (pd.notna(p_val) and p_val < 0.05) else ("⚠️ Marginalmente Significativo" if (pd.notna(p_val) and p_val < 0.10) else "❌ Estatisticamente Igual"),
                 "Impacto do Efeito (Cohen's d)": f"{d_cohen:+.3f}"
             })
             
