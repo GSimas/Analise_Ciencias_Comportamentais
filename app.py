@@ -1478,6 +1478,42 @@ if df_bruto is not None:
                     else:
                         st.warning(f"Não há dados pareados suficientes (Pré e Pós) para calcular a estatística entre {g1} e {g2}.")
 
+                    # ==========================================
+            # NOVO: AUDITORIA DE USUÁRIAS DO TESTE
+            # ==========================================
+            with st.expander(f"🔎 Ver as {len(df_plot.dropna(subset=[c_ini, c_fin]))} empreendedoras incluídas no teste de {metrica_teste}"):
+                st.markdown("""
+                Esta tabela mostra os dados brutos apenas das empreendedoras que possuem o par de respostas (Pré e Pós) 
+                para a métrica selecionada, sendo efetivamente contabilizadas no teste estatístico acima.
+                """)
+                
+                # Filtra a base para manter apenas quem tem os dois dados
+                df_auditoria = df_plot.dropna(subset=[c_ini, c_fin]).copy()
+                
+                # Define colunas importantes para identificação + as notas da métrica
+                # Usamos 'grupo_comparacao' e 'nome' baseados no padrão do seu app
+                colunas_desejadas = ['nome', 'telefone', 'grupo_comparacao', c_ini, c_fin]
+                
+                # Garante que vai tentar puxar apenas colunas que realmente existem no DataFrame
+                colunas_existentes = [col for col in colunas_desejadas if col in df_auditoria.columns]
+                
+                # Exibe a tabela de auditoria
+                st.dataframe(
+                    df_auditoria[colunas_existentes].sort_values(by='grupo_comparacao'), 
+                    use_container_width=True,
+                    hide_index=True
+                )
+                
+                # Botão de download para essa amostra específica
+                csv_auditoria = df_auditoria[colunas_existentes].to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label=f"📥 Baixar Amostra Valida - {metrica_teste} (CSV)",
+                    data=csv_auditoria,
+                    file_name=f"auditoria_pareada_{metrica_teste}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+
             with tab_deltas:
                 st.markdown("### Diferença de Mudança Entre Grupos (ΔΔ)")
                 st.info("Avalia de forma cruzada se a \"melhora\" (Efeito Pós-Pré) obtida por um grupo superou cientificamente a de outro (Teste t de Welch para amostras independentes de Deltas da Métrica Selecionada acima).")
@@ -2064,6 +2100,30 @@ if df_bruto is not None:
                             st.write(f"*{idx+1}. \"{resp}\"*")
                 else:
                     st.warning("Sem sugestões textuais válidas para gerar a nuvem neste grupo.")
+
+            # ==========================================
+            # 6. DADOS BRUTOS (RAW DATA)
+            # ==========================================
+            st.divider()
+            st.subheader("🗄️ 6. Base de Dados Completa")
+            st.markdown("""
+            Abaixo você pode explorar a base de dados completa e processada que alimenta este dashboard. 
+            Utilize a barra de rolagem para navegar pelas colunas ou o botão abaixo para exportar os dados.
+            """)
+
+            with st.expander("🔎 Visualizar Tabela de Dados Brutos"):
+                # Exibe o dataframe (Use 'df' para a base inteira ou 'df_plot' se quiser a base filtrada pelos seletores do menu lateral)
+                st.dataframe(df, width='stretch')
+                
+                # Botão de download direto
+                csv_bruto = df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Baixar Dados Brutos (CSV)",
+                    data=csv_bruto,
+                    file_name="base_dados_brutos_completa.csv",
+                    mime="text/csv",
+                    width='stretch'
+                )   
 
 else:
     st.warning("Aguardando conexão com a base de dados do Google Drive...")
